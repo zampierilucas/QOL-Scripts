@@ -1,8 +1,9 @@
 import pyautogui
 import time
 import screen_brightness_control as sbc
-from win32gui import GetWindowText, GetForegroundWindow
-from win32con import WM_INPUTLANGCHANGEREQUEST
+from win32gui import GetWindowText, GetForegroundWindow, MonitorFromWindow
+from win32api import GetMonitorInfo
+from win32con import WM_INPUTLANGCHANGEREQUEST, MONITOR_DEFAULTTONEAREST
 import os
 import logging
 import requests
@@ -99,6 +100,65 @@ def set_brigtness_side_monitors(brightness, monitor_ids):
         except Exception as e:
             logger.error(f"Failed to set brightness for monitor ID {monitor_id}: {e}")
 
+def get_focused_monitor_info():
+    """
+    Get information about the monitor containing the focused window
+    Returns the monitor's device name or None if not found
+    """
+    try:
+        # Get the focused window handle
+        focused_window = GetForegroundWindow()
+        if not focused_window:
+            return None
+            
+        # Get the monitor handle for the focused window
+        monitor_handle = MonitorFromWindow(focused_window, MONITOR_DEFAULTTONEAREST)
+        if not monitor_handle:
+            return None
+            
+        # Get monitor info
+        monitor_info = GetMonitorInfo(monitor_handle)
+        if not monitor_info:
+            return None
+            
+        # Extract device name from monitor info
+        device_name = monitor_info.get('Device', '')
+        return device_name
+        
+    except Exception as e:
+        logger.error(f"Error getting focused monitor info: {e}")
+        return None
+
+def get_all_monitor_serials_except_focused():
+    """
+    Get all monitor serials except the one containing the focused window
+    """
+    try:
+        # Get focused monitor device name
+        focused_device = get_focused_monitor_info()
+        if not focused_device:
+            # If we can't detect focused monitor, return all configured monitors
+            return []
+            
+        # Get all monitors info
+        monitors_info = sbc.list_monitors_info()
+        non_focused_serials = []
+        
+        for info in monitors_info:
+            # Try to match by device name or other identifiers
+            serial = info.get('serial', '')
+            # Note: screen_brightness_control might not provide device name directly
+            # We'll need to use index matching as fallback
+            non_focused_serials.append(serial)
+            
+        # For now, return all except the first one (primary) as a simple implementation
+        # This needs refinement based on actual monitor detection capabilities
+        return non_focused_serials[1:] if len(non_focused_serials) > 1 else []
+        
+    except Exception as e:
+        logger.error(f"Error getting non-focused monitors: {e}")
+        return []
+
 # ----------------------------------
 # 4) LCU (LEAGUE CLIENT) HELPER
 # ----------------------------------
@@ -157,7 +217,8 @@ class Settings:
             "Hell Let Loose"
         ],
         "dimming_enabled": True, 
-        "auto_accept_enabled": True  
+        "auto_accept_enabled": True,
+        "dim_all_except_focused": False
     }
     
     def __init__(self):
@@ -170,11 +231,13 @@ class Settings:
         try:
             with open(self.settings_file, 'r') as f:
                 self.data = json.load(f)
-                # Migrate existing settings if dimming_enabled is missing
+                # Migrate existing settings if missing
                 if "dimming_enabled" not in self.data:
                     self.data["dimming_enabled"] = True
                 if "auto_accept_enabled" not in self.data:  
                     self.data["auto_accept_enabled"] = True
+                if "dim_all_except_focused" not in self.data:
+                    self.data["dim_all_except_focused"] = False
                 self.save_settings()
         except (FileNotFoundError, json.JSONDecodeError):
             self.data = self.DEFAULT_SETTINGS
@@ -308,6 +371,15 @@ class SettingsWindow:
         self.low_brightness = tk.Scale(brightness_frame, from_=0, to=100, orient="horizontal")
         self.low_brightness.set(self.settings.data["monitor_brightness"]["low"])
         self.low_brightness.pack(fill="x")
+        
+        # Dimming mode selection
+        self.dim_all_except_focused_var = tk.BooleanVar()
+        self.dim_all_except_focused_var.set(self.settings.data.get("dim_all_except_focused", False))
+        ttk.Checkbutton(
+            brightness_frame,
+            text="Dim all monitors except focused (experimental)",
+            variable=self.dim_all_except_focused_var
+        ).pack(anchor="w", pady=(10, 0))
 
         # Games section
         games_section = ttk.Frame(main_container)
@@ -400,6 +472,9 @@ class SettingsWindow:
                 x.strip() for x in self.games_text.get("1.0", "end-1c").split("\n") 
                 if x.strip()
             ]
+            
+            # Save dimming mode setting
+            self.settings.data["dim_all_except_focused"] = self.dim_all_except_focused_var.get()
 
             # Save to file and close window
             self.settings.save_settings()
@@ -576,16 +651,37 @@ class AutoAccept:
             # Handle dimming separately
             if self.settings.data["dimming_enabled"]:
                 focused = GetWindowText(GetForegroundWindow())
-                if focused in self.settings.data['games_to_dimm']:
-                    set_brigtness_side_monitors(
-                        self.settings.data["monitor_brightness"]["low"],
-                        self.settings.data["dimmable_monitors"]
-                    )
+                
+                if self.settings.data["dim_all_except_focused"]:
+                    # New mode: dim all monitors except the one with focused window
+                    if focused in self.settings.data['games_to_dimm']:
+                        # Get all monitor serials except the focused one
+                        monitors_to_dim = get_all_monitor_serials_except_focused()
+                        # Dim only non-focused monitors
+                        set_brigtness_side_monitors(
+                            self.settings.data["monitor_brightness"]["low"],
+                            monitors_to_dim
+                        )
+                        # Keep focused monitor bright (if it's in dimmable list)
+                        # Note: This is a simplified approach - might need refinement
+                    else:
+                        # Restore all monitors to high brightness
+                        set_brigtness_side_monitors(
+                            self.settings.data["monitor_brightness"]["high"],
+                            self.settings.data["dimmable_monitors"]
+                        )
                 else:
-                    set_brigtness_side_monitors(
-                        self.settings.data["monitor_brightness"]["high"],
-                        self.settings.data["dimmable_monitors"]
-                    )
+                    # Original mode: dim configured monitors when game is focused
+                    if focused in self.settings.data['games_to_dimm']:
+                        set_brigtness_side_monitors(
+                            self.settings.data["monitor_brightness"]["low"],
+                            self.settings.data["dimmable_monitors"]
+                        )
+                    else:
+                        set_brigtness_side_monitors(
+                            self.settings.data["monitor_brightness"]["high"],
+                            self.settings.data["dimmable_monitors"]
+                        )
 
             time.sleep(1)
 

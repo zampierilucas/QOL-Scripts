@@ -8,6 +8,7 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         'win32gui',
+        'win32api',
         'win32con', 
         'win32com.client',
         'winshell',
