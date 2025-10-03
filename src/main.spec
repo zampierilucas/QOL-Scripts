@@ -7,12 +7,6 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=[
-        'win32gui',
-        'win32api',
-        'win32con', 
-        'win32com.client',
-        'winshell',
-        'winreg',
         'screen_brightness_control',
         'pywinstyles',
         'sv_ttk',
@@ -26,7 +20,7 @@ a = Analysis(
         'base64',
         'io'
     ],
-    hookspath=[],
+    hookspath=['hooks'],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
