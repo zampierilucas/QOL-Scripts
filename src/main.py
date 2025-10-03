@@ -129,32 +129,45 @@ def get_focused_monitor_info():
         logger.error(f"Error getting focused monitor info: {e}")
         return None
 
+def get_all_monitor_serials():
+    """
+    Get all monitor serials
+    """
+    try:
+        monitors_info = sbc.list_monitors_info()
+        return [info.get('serial', '') for info in monitors_info]
+    except Exception as e:
+        logger.error(f"Error getting all monitor serials: {e}")
+        return []
+
 def get_all_monitor_serials_except_focused():
     """
     Get all monitor serials except the one containing the focused window
     """
     try:
-        # Get focused monitor device name
         focused_device = get_focused_monitor_info()
         if not focused_device:
-            # If we can't detect focused monitor, return all configured monitors
             return []
-            
-        # Get all monitors info
+
         monitors_info = sbc.list_monitors_info()
-        non_focused_serials = []
         
+        # Find the focused monitor's serial
+        focused_serial = None
         for info in monitors_info:
-            # Try to match by device name or other identifiers
-            serial = info.get('serial', '')
-            # Note: screen_brightness_control might not provide device name directly
-            # We'll need to use index matching as fallback
-            non_focused_serials.append(serial)
-            
-        # For now, return all except the first one (primary) as a simple implementation
-        # This needs refinement based on actual monitor detection capabilities
-        return non_focused_serials[1:] if len(non_focused_serials) > 1 else []
+            if info.get('device') == focused_device:
+                focused_serial = info.get('serial')
+                break
         
+        # If focused monitor not found in sbc list, return empty
+        if not focused_serial:
+            return []
+
+        # Return all serials except the focused one
+        return [
+            info.get('serial') for info in monitors_info
+            if info.get('serial') != focused_serial
+        ]
+
     except Exception as e:
         logger.error(f"Error getting non-focused monitors: {e}")
         return []
@@ -657,18 +670,24 @@ class AutoAccept:
                     if focused in self.settings.data['games_to_dimm']:
                         # Get all monitor serials except the focused one
                         monitors_to_dim = get_all_monitor_serials_except_focused()
+                        all_monitors = get_all_monitor_serials()
+                        focused_monitors = [m for m in all_monitors if m and m not in monitors_to_dim]
+
                         # Dim only non-focused monitors
                         set_brigtness_side_monitors(
                             self.settings.data["monitor_brightness"]["low"],
                             monitors_to_dim
                         )
-                        # Keep focused monitor bright (if it's in dimmable list)
-                        # Note: This is a simplified approach - might need refinement
+                        # Ensure focused monitor is bright
+                        set_brigtness_side_monitors(
+                            self.settings.data["monitor_brightness"]["high"],
+                            focused_monitors
+                        )
                     else:
                         # Restore all monitors to high brightness
                         set_brigtness_side_monitors(
                             self.settings.data["monitor_brightness"]["high"],
-                            self.settings.data["dimmable_monitors"]
+                            get_all_monitor_serials()
                         )
                 else:
                     # Original mode: dim configured monitors when game is focused
