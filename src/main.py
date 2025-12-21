@@ -239,10 +239,10 @@ class Settings:
             "low": 10
         },
         "games_to_dimm": [
-            "League of Legends (TM) Client",
-            "EscapeFromTarkov",
             "Counter-Strike 2",
-            "Hell Let Loose"
+            "EscapeFromTarkov",
+            "Hell Let Loose",
+            "League of Legends (TM) Client"
         ],
         "dimming_enabled": True, 
         "auto_accept_enabled": True,
@@ -299,7 +299,7 @@ class SettingsWindow:
         self.root.maxsize(600, 850)
         sv_ttk.set_theme(darkdetect.theme())
         self.monitor_vars = {}
-        self.games_list = list(self.settings.data["games_to_dimm"])
+        self.games_list = sorted(self.settings.data["games_to_dimm"], key=str.lower)
         self.create_widgets()
         apply_theme_to_titlebar(self.root)
 
@@ -379,6 +379,7 @@ class SettingsWindow:
                 self.games_list.append(manual)
                 added = True
             if added:
+                self.games_list.sort(key=str.lower)
                 self.refresh_games_listbox()
             dialog.destroy()
 
@@ -578,7 +579,7 @@ class SettingsWindow:
             self.settings.data["monitor_brightness"]["high"] = self.high_brightness_var.get()
             self.settings.data["monitor_brightness"]["low"] = self.low_brightness_var.get()
 
-            self.settings.data["games_to_dimm"] = [g.strip() for g in self.games_list if g.strip()]
+            self.settings.data["games_to_dimm"] = sorted([g.strip() for g in self.games_list if g.strip()], key=str.lower)
 
             self.settings.data["dim_all_except_focused"] = self.dim_all_except_focused_var.get()
 
@@ -643,6 +644,10 @@ class AutoAccept:
         exe_name = os.path.basename(self.get_executable_path())
         return os.path.join(self.install_dir, exe_name)
 
+    def is_frozen(self):
+        """Check if running from compiled exe (not .py file)"""
+        return getattr(sys, 'frozen', False)
+
     def toggle_startup(self, icon, item):
         """Toggle startup by installing app and managing shortcut"""
         try:
@@ -650,6 +655,11 @@ class AutoAccept:
                 os.remove(self.startup_shortcut)
                 logger.info("Removed from startup")
             else:
+                # Only allow startup installation from compiled exe
+                if not self.is_frozen():
+                    logger.warning("Startup installation is only available when running from the compiled .exe")
+                    return
+
                 # Create install directory
                 os.makedirs(self.install_dir, exist_ok=True)
 
@@ -787,7 +797,7 @@ class AutoAccept:
 
                     # Handle dimming when focus changes
                     if self.settings.data["dimming_enabled"]:
-                        is_game_focused = focused in self.settings.data['games_to_dimm']
+                        is_game_focused = focused.strip() in self.settings.data['games_to_dimm']
                         brightness_state = (is_game_focused, self.settings.data["dim_all_except_focused"])
 
                         # Only change brightness if state changed

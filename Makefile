@@ -7,7 +7,7 @@ SPEC_FILE = $(SRC_DIR)/main.spec
 DIST_DIR = $(SRC_DIR)/dist
 BUILD_DIR = $(SRC_DIR)/build
 
-.PHONY: all verify lint compile build dist clean install help run
+.PHONY: all verify lint compile build dist clean install help run debug
 
 # Default target
 all: verify build
@@ -33,6 +33,10 @@ compile:
 run:
 	$(PYTHON) $(SRC_DIR)/main.py
 
+# Run with debug mode
+debug:
+	$(PYTHON) $(SRC_DIR)/main.py --debug
+
 # Build executable with PyInstaller (uses cache for speed)
 build: dist
 
@@ -57,6 +61,7 @@ help:
 	@echo "  make lint     - Run ruff linter only"
 	@echo "  make compile  - Check for Python syntax errors"
 	@echo "  make run      - Run directly with Python (no compile)"
+	@echo "  make debug    - Run with --debug flag"
 	@echo "  make build    - Build executable (uses cache, fast)"
 	@echo "  make rebuild  - Clean + build (slow, full rebuild)"
 	@echo "  make clean    - Remove build artifacts"
