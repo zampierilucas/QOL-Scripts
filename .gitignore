@@ -1,3 +1,7 @@
 *.png
 .vscode/
 __pycache__/
+venv/
+src/build/
+src/dist/
+src/_version.py

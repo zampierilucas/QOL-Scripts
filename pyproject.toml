@@ -1,0 +1,9 @@
+[project]
+name = "QOL-Scripts"
+version = "1.1.0"
+description = "Quality of Life scripts for Windows"
+requires-python = ">=3.11"
+
+[tool.pyinstaller]
+# Configuration reference for PyInstaller (actual build uses main.spec)
+script = "src/main.py"
