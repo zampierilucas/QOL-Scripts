@@ -2,12 +2,12 @@
 
 ## Overview
 This script offers:
-- Automatic match acceptance (League of Legends and, Counter-Strike).
+- Automatic match acceptance for League of Legends.
 - Automatic monitor brightness adjustments when playing certain games.
 
 ## Features
 - Automatically detects the foreground application to dim or brighten secondary monitors.
-- Accepts matches via image recognition or through game-specific APIs when possible.
+- Automatically accepts League of Legends matches via the game's API.
 - Configurable via a system tray icon, with toggles for auto accept and dimming.
 - Simple, theme-aware GUI for selecting specific monitors to adjust.
 
@@ -25,10 +25,9 @@ This script offers:
 ## Usage
 1. The script runs in the system tray.
 2. Right-click the tray icon to:
-   - Configure settings (dimming and auto-accept).
-   - Toggle features on or off.
-   - Access “About” to view the repository link.
-3. Edit settings.json or use the GUI to specify dimmable monitors and apps to dim.
+   - Open Settings to configure monitors, games, and brightness.
+   - Toggle auto-accept and dimming on or off.
+   - Access "About" to view the repository link.
 
 ## Contributing
 Feel free to submit issues or pull requests on GitHub.
