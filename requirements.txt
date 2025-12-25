@@ -8,3 +8,4 @@ darkdetect
 pywinstyles
 winshell
 lcu-driver
+requests
