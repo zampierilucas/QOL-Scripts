@@ -56,6 +56,10 @@ jobs:
         with:
           name: qol_scripts
 
+      - name: Rename exe with version
+        shell: bash
+        run: mv "./QOL-scripts.exe" "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
+
       - name: Delete Existing Dev Release
         uses: actions/github-script@v6
         with:
@@ -81,7 +85,7 @@ jobs:
         with:
           tag_name: latest
           name: "Development Build (v${{ needs.build.outputs.version }})"
-          files: "./QOL-scripts.exe"
+          files: "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
           prerelease: true
           fail_on_unmatched_files: true
 
@@ -96,10 +100,14 @@ jobs:
         with:
           name: qol_scripts
 
+      - name: Rename exe with version
+        shell: bash
+        run: mv "./QOL-scripts.exe" "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
+
       - name: Create Versioned Release
         uses: softprops/action-gh-release@v1
         with:
           name: "Release ${{ github.ref_name }}"
-          files: "./QOL-scripts.exe"
+          files: "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
           fail_on_unmatched_files: true
           generate_release_notes: true
