@@ -33,6 +33,7 @@ a = Analysis(
         'brightness',
         'settings_window',
         'app',
+        '_version',
         'urllib3',
         'requests',
         'lcu_driver',
