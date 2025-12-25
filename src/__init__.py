@@ -1,1 +1,1 @@
-from .main import AutoAccept as AutoAccept
+from .app import AutoAccept as AutoAccept
