@@ -2,14 +2,13 @@ import sys
 import logging
 import tkinter as tk
 from tkinter import ttk
-import screen_brightness_control as sbc
 import win32gui
 import sv_ttk
 import darkdetect
 import pywinstyles
 
 from lol.lcu_api import LCUApi
-from brightness import clean_window_title
+from brightness import clean_window_title, get_cached_monitors
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +317,7 @@ class SettingsWindow:
         monitors_frame.pack(fill="x", pady=(0, 10))
 
         try:
-            monitors_info = sbc.list_monitors_info()
+            monitors_info = get_cached_monitors()
             logger.debug(f"Found {len(monitors_info)} monitors")
 
             for index, info in enumerate(monitors_info):

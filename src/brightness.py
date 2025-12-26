@@ -7,6 +7,30 @@ from win32con import MONITOR_DEFAULTTONEAREST
 
 logger = logging.getLogger(__name__)
 
+# Module-level monitor cache (populated once at startup)
+_monitors_cache = None
+
+
+def init_monitors_cache():
+    """Initialize the monitor cache. Call once at startup."""
+    global _monitors_cache
+    _monitors_cache = sbc.list_monitors_info()
+    logger.info(f"Cached {len(_monitors_cache)} monitors")
+    return _monitors_cache
+
+
+def get_cached_monitors():
+    """Get cached monitor info. Returns empty list if not initialized."""
+    if _monitors_cache is None:
+        logger.warning("Monitor cache not initialized, initializing now")
+        return init_monitors_cache()
+    return _monitors_cache
+
+
+def get_all_monitor_serials():
+    """Get all monitor serials from cache."""
+    return [info.get('serial') for info in get_cached_monitors()]
+
 
 def clean_window_title(title):
     """
@@ -102,7 +126,7 @@ def get_all_monitor_serials_except_focused():
             logger.debug(f"Could not parse display number from: {focused_device}")
             focused_display_index = 0
 
-        monitors_info = sbc.list_monitors_info()
+        monitors_info = get_cached_monitors()
         logger.debug(f"Total monitors found: {len(monitors_info)}")
 
         non_focused_serials = []

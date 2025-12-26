@@ -13,7 +13,6 @@ from threading import Thread
 
 import pystray
 from PIL import Image
-import screen_brightness_control as sbc
 from win32_window_monitor import (
     init_com, set_win_event_hook, run_message_loop,
     get_window_title, HookEvent
@@ -25,7 +24,10 @@ import winshell
 from win32com.client import Dispatch
 
 from settings import Settings, PROGRAM_NAME
-from brightness import set_brightness_side_monitors, get_all_monitor_serials_except_focused, clean_window_title
+from brightness import (
+    set_brightness_side_monitors, get_all_monitor_serials_except_focused,
+    clean_window_title, init_monitors_cache, get_all_monitor_serials
+)
 from lol import LoLAutoAccept, LoLAutoPick, SharedLCUConnector
 from settings_window import SettingsWindow
 
@@ -78,11 +80,11 @@ class QOLApp:
         self._focus_monitor_thread_id = None
 
         try:
-            logger.info("Setting all monitors to 100% brightness on startup")
-            all_monitors = [info.get('serial') for info in sbc.list_monitors_info()]
-            set_brightness_side_monitors(100, all_monitors)
+            logger.info("Initializing monitor cache and setting brightness to 100%")
+            init_monitors_cache()
+            set_brightness_side_monitors(100, get_all_monitor_serials())
         except Exception as e:
-            logger.error(f"Failed to set all monitors to 100% on startup: {e}")
+            logger.error(f"Failed to initialize monitors on startup: {e}")
 
     def signal_handler(self, signum, frame):
         logger.debug("Received signal to terminate. Cleaning up...")
@@ -286,9 +288,8 @@ class QOLApp:
                             logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
                             set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
                         else:
-                            all_monitors = [info.get('serial') for info in sbc.list_monitors_info()]
                             logger.debug("Game unfocused - restoring all monitors")
-                            set_brightness_side_monitors(brightness_settings["high"], all_monitors)
+                            set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
         except Exception as e:
             logger.error(f"Error in foreground change handler: {e}")
 
