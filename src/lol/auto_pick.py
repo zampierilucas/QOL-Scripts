@@ -1,12 +1,11 @@
 import logging
 import asyncio
-from threading import Thread
-from lcu_driver import Connector
+from .connector_base import LCUConnectorBase
 
 logger = logging.getLogger(__name__)
 
 
-class LoLAutoPick:
+class LoLAutoPick(LCUConnectorBase):
     """
     WebSocket-based LoL champion auto-picker using lcu-driver.
     Automatically hovers the configured default champion based on assigned role.
@@ -15,54 +14,26 @@ class LoLAutoPick:
     AUTO_LOCK_THRESHOLD_MS = 5000  # Lock champion if less than 5 seconds left
 
     def __init__(self, settings):
-        self.settings = settings
-        self.connector = None
-        self.loop = None
-        self.running = False
+        super().__init__(settings, "auto-pick")
         self.hovered_this_session = False
         self.locked_this_session = False
         self.lock_timer_task = None
         self.current_action_id = None
         self.current_connection = None
 
-    def start(self):
-        """Start the WebSocket connector in a separate thread"""
-        if not self.running:
-            self.running = True
-            thread = Thread(target=self._run_connector, daemon=True)
-            thread.start()
-            logger.info("LoL WebSocket auto-pick thread started")
+    def _register_handlers(self):
+        """Register the champion select event handler"""
 
-    def _run_connector(self):
-        """Run the connector (blocks until stopped)"""
-        try:
-            logger.debug("Auto-pick connector thread starting...")
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            self.connector = Connector()
+        @self.connector.ws.register('/lol-champ-select/v1/session', event_types=('CREATE', 'UPDATE'))
+        async def on_champ_select(connection, event):
+            if not self.settings.data.get("auto_pick_enabled", True):
+                logger.debug("Champion select event but auto-pick is disabled")
+                return
 
-            @self.connector.ready
-            async def on_lcu_ready(connection):
-                logger.info("LoL Client connected - WebSocket auto-pick is active")
-
-            @self.connector.close
-            async def on_lcu_close(connection):
-                logger.info("LoL Client disconnected - WebSocket auto-pick stopped")
-
-            @self.connector.ws.register('/lol-champ-select/v1/session', event_types=('CREATE', 'UPDATE'))
-            async def on_champ_select(connection, event):
-                if not self.settings.data.get("auto_pick_enabled", True):
-                    logger.debug("Champion select event but auto-pick is disabled")
-                    return
-
-                try:
-                    await self._handle_champ_select(connection, event)
-                except Exception as e:
-                    logger.error(f"Error handling champion select: {e}")
-
-            self.connector.start()
-        except Exception as e:
-            logger.error(f"LoL WebSocket auto-pick connector error: {e}")
+            try:
+                await self._handle_champ_select(connection, event)
+            except Exception as e:
+                logger.error(f"Error handling champion select: {e}")
 
     async def _handle_champ_select(self, connection, event):
         """Handle champion select session events"""
@@ -96,15 +67,8 @@ class LoLAutoPick:
 
         default_champions = self.settings.data.get('default_champions', {})
         role_champions = default_champions.get(assigned_position, {})
-
-        # Handle both old format (single ID) and new format (primary/secondary dict)
-        if isinstance(role_champions, dict):
-            primary_id = role_champions.get('primary')
-            secondary_id = role_champions.get('secondary')
-        else:
-            # Old format fallback
-            primary_id = role_champions
-            secondary_id = None
+        primary_id = role_champions.get('primary')
+        secondary_id = role_champions.get('secondary')
 
         if not primary_id and not secondary_id:
             logger.debug(f"No default champion configured for {assigned_position}")
@@ -237,15 +201,6 @@ class LoLAutoPick:
         except Exception as e:
             logger.error(f"Failed to auto-lock champion: {e}")
 
-    def stop(self):
-        """Stop the WebSocket connector"""
+    def _on_stop(self):
+        """Cancel lock timer before stopping"""
         self._cancel_lock_timer()
-        if self.running:
-            self.running = False
-            try:
-                if self.connector and self.loop and self.loop.is_running():
-                    asyncio.run_coroutine_threadsafe(self.connector.stop(), self.loop)
-                    self.loop.call_soon_threadsafe(self.loop.stop)
-                logger.info("LoL WebSocket auto-pick stopped")
-            except Exception as e:
-                logger.error(f"Error stopping LoL WebSocket auto-pick connector: {e}")

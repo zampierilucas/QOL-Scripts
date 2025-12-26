@@ -1,5 +1,6 @@
 *.png
 .vscode/
+.claude/
 __pycache__/
 venv/
 src/build/

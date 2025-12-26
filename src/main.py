@@ -1,9 +1,12 @@
 import argparse
 import logging
 
-# Disable "unverified HTTPS request" warnings
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
+
+from app import QOLApp
+
+# Disable "unverified HTTPS request" warnings
 urllib3.disable_warnings(InsecureRequestWarning)
 
 
@@ -23,9 +26,7 @@ if __name__ == "__main__":
 
     setup_logging(args.debug)
 
-    from app import AutoAccept
-
-    app = AutoAccept()
+    app = QOLApp()
     try:
         app.run()
     except KeyboardInterrupt:

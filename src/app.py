@@ -7,6 +7,8 @@ import io
 import signal
 import shutil
 import webbrowser
+import tomllib
+import pathlib
 from threading import Thread
 
 import pystray
@@ -16,16 +18,35 @@ from win32gui import GetWindowText, GetForegroundWindow
 import winshell
 from win32com.client import Dispatch
 
-from _version import VERSION
 from settings import Settings, PROGRAM_NAME
 from brightness import set_brightness_side_monitors, get_all_monitor_serials_except_focused, clean_window_title
 from lol import LoLAutoAccept, LoLAutoPick
 from settings_window import SettingsWindow
 
+try:
+    from _version import VERSION as _BUNDLED_VERSION
+except ImportError:
+    _BUNDLED_VERSION = None
+
+
+def _get_version():
+    """Get version from pyproject.toml (dev) or _version.py (compiled exe)"""
+    pyproject = pathlib.Path(__file__).parent.parent / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            with open(pyproject, "rb") as f:
+                return tomllib.load(f)["project"]["version"]
+        except Exception:
+            pass
+    return _BUNDLED_VERSION or "unknown"
+
+
+VERSION = _get_version()
+
 logger = logging.getLogger(__name__)
 
 
-class AutoAccept:
+class QOLApp:
     def __init__(self):
         self.settings = Settings()
         self.create_tray_icon()

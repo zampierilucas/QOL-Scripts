@@ -446,15 +446,9 @@ class SettingsWindow:
 
                 ttk.Label(role_frame, text=f"{role_display}:", width=8).pack(side="left")
 
-                # Get current settings (handle both old and new format)
                 role_data = self.settings.data.get("default_champions", {}).get(role_key, {})
-                if isinstance(role_data, dict):
-                    primary_id = role_data.get('primary')
-                    secondary_id = role_data.get('secondary')
-                else:
-                    # Old format
-                    primary_id = role_data
-                    secondary_id = None
+                primary_id = role_data.get('primary')
+                secondary_id = role_data.get('secondary')
 
                 # Primary champion
                 primary_var = tk.StringVar()
