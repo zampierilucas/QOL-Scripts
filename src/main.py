@@ -1,6 +1,11 @@
 import argparse
 import logging
 
+# Silence noisy loggers before importing modules that use them
+logging.getLogger("PIL").setLevel(logging.WARNING)
+logging.getLogger("screen_brightness_control").setLevel(logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -17,6 +22,7 @@ def setup_logging(debug=False):
     )
     logging.getLogger("screen_brightness_control").setLevel(logging.ERROR)
     logging.getLogger("lcu-driver").setLevel(logging.INFO)
+    logging.getLogger("PIL").setLevel(logging.WARNING)
 
 
 if __name__ == "__main__":
