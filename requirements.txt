@@ -9,3 +9,4 @@ pywinstyles~=1.8
 winshell~=0.6
 lcu-driver~=3.0.0
 requests~=2.32.0
+win32-window-monitor~=0.3.3

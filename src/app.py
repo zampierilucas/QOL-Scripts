@@ -14,13 +14,19 @@ from threading import Thread
 import pystray
 from PIL import Image
 import screen_brightness_control as sbc
-from win32gui import GetWindowText, GetForegroundWindow
+from win32_window_monitor import (
+    init_com, set_win_event_hook, run_message_loop,
+    get_window_title, HookEvent
+)
+from win32_window_monitor.win32api import UnhookWinEvent
+import ctypes
+from ctypes import wintypes
 import winshell
 from win32com.client import Dispatch
 
 from settings import Settings, PROGRAM_NAME
 from brightness import set_brightness_side_monitors, get_all_monitor_serials_except_focused, clean_window_title
-from lol import LoLAutoAccept, LoLAutoPick
+from lol import LoLAutoAccept, LoLAutoPick, SharedLCUConnector
 from settings_window import SettingsWindow
 
 try:
@@ -58,11 +64,18 @@ class QOLApp:
         self.last_focused_window = None
         self.last_brightness_state = None
 
+        # Create shared LCU connector with handlers
         self.lol_auto_accept = LoLAutoAccept(self.settings)
         self.lol_auto_pick = LoLAutoPick(self.settings)
+        self.lcu_connector = SharedLCUConnector()
+        self.lcu_connector.register_handler(self.lol_auto_accept)
+        self.lcu_connector.register_handler(self.lol_auto_pick)
+        self.lcu_connector.register_close_callback(lambda _: self.lol_auto_accept.on_disconnect())
+        self.lcu_connector.register_close_callback(lambda _: self.lol_auto_pick.on_disconnect())
 
         self.settings_requested = False
         self.settings_window = None
+        self._focus_monitor_thread_id = None
 
         try:
             logger.info("Setting all monitors to 100% brightness on startup")
@@ -215,8 +228,13 @@ class QOLApp:
                     self.settings_window.root.destroy()
                 except Exception:
                     pass
-            self.lol_auto_accept.stop()
-            self.lol_auto_pick.stop()
+            self.lcu_connector.stop()
+            # Stop the focus monitor thread by posting WM_QUIT to its message loop
+            if self._focus_monitor_thread_id:
+                WM_QUIT = 0x0012
+                ctypes.windll.user32.PostThreadMessageW(
+                    self._focus_monitor_thread_id, WM_QUIT, 0, 0
+                )
             self.icon.stop()
             if self.settings.data["dimming_enabled"]:
                 set_brightness_side_monitors(
@@ -225,9 +243,8 @@ class QOLApp:
                 )
 
     def run(self):
-        self.lol_auto_accept.start()
-        self.lol_auto_pick.start()
-        Thread(target=self.main_loop, daemon=True).start()
+        self.lcu_connector.start()
+        Thread(target=self._focus_monitor_loop, daemon=True).start()
         Thread(target=self.icon.run, daemon=True).start()
 
         while self.running:
@@ -238,39 +255,62 @@ class QOLApp:
                 self.settings_window = None
             time.sleep(0.1)
 
-    def main_loop(self):
-        while self.running:
-            try:
-                foreground_window = GetForegroundWindow()
-                focused = GetWindowText(foreground_window)
+    def _on_foreground_change(self, win_event_hook_handle, event_id: int,
+                                hwnd: wintypes.HWND, id_object: wintypes.LONG,
+                                id_child: wintypes.LONG, event_thread_id: wintypes.DWORD,
+                                event_time_ms: wintypes.DWORD):
+        """Callback for foreground window change events."""
+        try:
+            focused = get_window_title(hwnd)
 
-                if focused != self.last_focused_window:
-                    self.last_focused_window = focused
-                    logger.debug(f"Focus changed to: '{focused}'")
+            if focused != self.last_focused_window:
+                self.last_focused_window = focused
+                logger.debug(f"Focus changed to: '{focused}'")
 
-                    if self.settings.data["dimming_enabled"]:
-                        games_list = self.settings.data['games_to_dimm']
-                        cleaned_focused = clean_window_title(focused)
-                        is_game_focused = cleaned_focused in games_list
-                        brightness_state = (is_game_focused, self.settings.data["dim_all_except_focused"])
+                if self.settings.data["dimming_enabled"]:
+                    games_list = self.settings.data['games_to_dimm']
+                    cleaned_focused = clean_window_title(focused)
+                    is_game_focused = cleaned_focused in games_list
+                    brightness_state = (is_game_focused, self.settings.data["dim_all_except_focused"])
 
-                        if brightness_state != self.last_brightness_state:
-                            self.last_brightness_state = brightness_state
+                    if brightness_state != self.last_brightness_state:
+                        self.last_brightness_state = brightness_state
 
-                            dim_all_mode = self.settings.data["dim_all_except_focused"]
-                            brightness_settings = self.settings.data["monitor_brightness"]
+                        dim_all_mode = self.settings.data["dim_all_except_focused"]
+                        brightness_settings = self.settings.data["monitor_brightness"]
 
-                            if is_game_focused:
-                                monitors_to_dim = (get_all_monitor_serials_except_focused()
-                                                   if dim_all_mode
-                                                   else self.settings.data["dimmable_monitors"])
-                                logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
-                                set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
-                            else:
-                                all_monitors = [info.get('serial') for info in sbc.list_monitors_info()]
-                                logger.debug("Game unfocused - restoring all monitors")
-                                set_brightness_side_monitors(brightness_settings["high"], all_monitors)
+                        if is_game_focused:
+                            monitors_to_dim = (get_all_monitor_serials_except_focused()
+                                               if dim_all_mode
+                                               else self.settings.data["dimmable_monitors"])
+                            logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
+                            set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
+                        else:
+                            all_monitors = [info.get('serial') for info in sbc.list_monitors_info()]
+                            logger.debug("Game unfocused - restoring all monitors")
+                            set_brightness_side_monitors(brightness_settings["high"], all_monitors)
+        except Exception as e:
+            logger.error(f"Error in foreground change handler: {e}")
 
-                time.sleep(0.5)
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}")
+    def _focus_monitor_loop(self):
+        """Run the Windows event hook message loop for focus monitoring."""
+        try:
+            self._focus_monitor_thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+            with init_com():
+                self._foreground_hook = set_win_event_hook(
+                    self._on_foreground_change,
+                    HookEvent.SYSTEM_FOREGROUND
+                )
+                self._minimize_end_hook = set_win_event_hook(
+                    self._on_foreground_change,
+                    HookEvent.SYSTEM_MINIMIZEEND
+                )
+                logger.debug("Focus monitor hooks registered")
+                run_message_loop()
+        except Exception as e:
+            logger.error(f"Error in focus monitor loop: {e}")
+        finally:
+            if hasattr(self, '_foreground_hook') and self._foreground_hook:
+                UnhookWinEvent(self._foreground_hook)
+            if hasattr(self, '_minimize_end_hook') and self._minimize_end_hook:
+                UnhookWinEvent(self._minimize_end_hook)

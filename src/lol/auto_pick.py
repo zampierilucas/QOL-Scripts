@@ -1,30 +1,29 @@
 import logging
 import asyncio
-from .connector_base import LCUConnectorBase
 
 logger = logging.getLogger(__name__)
 
 
-class LoLAutoPick(LCUConnectorBase):
+class LoLAutoPick:
     """
-    WebSocket-based LoL champion auto-picker using lcu-driver.
+    WebSocket-based LoL champion auto-picker.
     Automatically hovers the configured default champion based on assigned role.
     Auto-locks if timer is below threshold.
     """
     AUTO_LOCK_THRESHOLD_MS = 5000  # Lock champion if less than 5 seconds left
 
     def __init__(self, settings):
-        super().__init__(settings, "auto-pick")
+        self.settings = settings
         self.hovered_this_session = False
         self.locked_this_session = False
         self.lock_timer_task = None
         self.current_action_id = None
         self.current_connection = None
 
-    def _register_handlers(self):
-        """Register the champion select event handler"""
+    def register_ws_handlers(self, connector):
+        """Register the champion select event handler with the shared connector."""
 
-        @self.connector.ws.register('/lol-champ-select/v1/session', event_types=('CREATE', 'UPDATE'))
+        @connector.ws.register('/lol-champ-select/v1/session', event_types=('CREATE', 'UPDATE'))
         async def on_champ_select(connection, event):
             if not self.settings.data.get("auto_pick_enabled", True):
                 logger.debug("Champion select event but auto-pick is disabled")
@@ -201,6 +200,8 @@ class LoLAutoPick(LCUConnectorBase):
         except Exception as e:
             logger.error(f"Failed to auto-lock champion: {e}")
 
-    def _on_stop(self):
-        """Cancel lock timer before stopping"""
+    def on_disconnect(self):
+        """Called when LCU disconnects."""
         self._cancel_lock_timer()
+        self.hovered_this_session = False
+        self.locked_this_session = False

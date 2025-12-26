@@ -1,23 +1,22 @@
 import logging
-from .connector_base import LCUConnectorBase
 
 logger = logging.getLogger(__name__)
 
 
-class LoLAutoAccept(LCUConnectorBase):
+class LoLAutoAccept:
     """
-    WebSocket-based LoL match auto-accepter using lcu-driver.
-    Runs in a separate thread and reacts instantly to ready-check events.
+    WebSocket-based LoL match auto-accepter.
+    Registers handlers with a shared LCU connector.
     """
 
     def __init__(self, settings):
-        super().__init__(settings, "auto-accept")
+        self.settings = settings
         self.accepted_this_check = False
 
-    def _register_handlers(self):
-        """Register the ready-check event handler"""
+    def register_ws_handlers(self, connector):
+        """Register the ready-check event handler with the shared connector."""
 
-        @self.connector.ws.register('/lol-matchmaking/v1/ready-check', event_types=('CREATE', 'UPDATE', 'DELETE'))
+        @connector.ws.register('/lol-matchmaking/v1/ready-check', event_types=('CREATE', 'UPDATE', 'DELETE'))
         async def on_ready_check(connection, event):
             # Reset flag when ready check ends
             if event.type == 'Delete':
@@ -37,3 +36,7 @@ class LoLAutoAccept(LCUConnectorBase):
                     logger.error(f"Failed to auto-accept match: {e}")
             else:
                 logger.debug("Ready check detected but auto-accept is disabled")
+
+    def on_disconnect(self):
+        """Called when LCU disconnects."""
+        self.accepted_this_check = False
