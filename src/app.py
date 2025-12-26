@@ -14,16 +14,29 @@ from threading import Thread
 import pystray
 from PIL import Image
 from win32_window_monitor import (
-    init_com, set_win_event_hook, run_message_loop,
-    get_window_title, HookEvent
+    init_com, set_win_event_hook, get_window_title, HookEvent
 )
-from win32_window_monitor.win32api import UnhookWinEvent
 import ctypes
 from ctypes import wintypes
 import winshell
 from win32com.client import Dispatch
 
 from settings import Settings, PROGRAM_NAME
+
+
+def _run_message_loop():
+    """Run WIN32 message loop until WM_QUIT is received.
+
+    Workaround for win32-window-monitor bug using TranslateMessageW
+    which doesn't exist (should be TranslateMessage).
+    """
+    user32 = ctypes.windll.user32
+    msg = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) != 0:
+        user32.TranslateMessage(ctypes.byref(msg))
+        user32.DispatchMessageW(ctypes.byref(msg))
+
+
 from brightness import (
     set_brightness_side_monitors, get_all_monitor_serials_except_focused,
     clean_window_title, init_monitors_cache, get_all_monitor_serials
@@ -307,11 +320,11 @@ class QOLApp:
                     HookEvent.SYSTEM_MINIMIZEEND
                 )
                 logger.debug("Focus monitor hooks registered")
-                run_message_loop()
+                _run_message_loop()
         except Exception as e:
             logger.error(f"Error in focus monitor loop: {e}")
         finally:
             if hasattr(self, '_foreground_hook') and self._foreground_hook:
-                UnhookWinEvent(self._foreground_hook)
+                self._foreground_hook.unhook()
             if hasattr(self, '_minimize_end_hook') and self._minimize_end_hook:
-                UnhookWinEvent(self._minimize_end_hook)
+                self._minimize_end_hook.unhook()
