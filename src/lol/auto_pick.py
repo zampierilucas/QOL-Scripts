@@ -111,8 +111,9 @@ class LoLAutoPick:
         time_left = timer.get('adjustedTimeLeftInPhase', 99999)
         logger.debug(f"Pick action: is_our_turn={is_our_turn}, champion={current_champion}, time_left={time_left}ms")
 
-        # Hover champion if we haven't yet and it's our turn
-        if not self.hovered_this_session and is_our_turn and current_champion != champion_id:
+        # Hover champion if we haven't yet, it's our turn, and no champion is selected
+        # Don't overwrite if user has already hovered/selected a champion manually
+        if not self.hovered_this_session and is_our_turn and current_champion == 0:
             try:
                 await connection.request(
                     'patch',

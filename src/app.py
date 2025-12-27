@@ -319,6 +319,10 @@ class QOLApp:
                     self._on_foreground_change,
                     HookEvent.SYSTEM_MINIMIZEEND
                 )
+                self._object_focus_hook = set_win_event_hook(
+                    self._on_foreground_change,
+                    HookEvent.OBJECT_FOCUS
+                )
                 logger.debug("Focus monitor hooks registered")
                 _run_message_loop()
         except Exception as e:
@@ -328,3 +332,5 @@ class QOLApp:
                 self._foreground_hook.unhook()
             if hasattr(self, '_minimize_end_hook') and self._minimize_end_hook:
                 self._minimize_end_hook.unhook()
+            if hasattr(self, '_object_focus_hook') and self._object_focus_hook:
+                self._object_focus_hook.unhook()
