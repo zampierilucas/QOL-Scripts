@@ -210,6 +210,8 @@ class SettingsWindow:
 
         self.create_widgets()
         apply_theme_to_titlebar(self.root)
+        # Bind cleanup to window close to avoid tkinter threading issues
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def get_running_programs(self):
         """Get list of running program window titles (filters out tool/overlay windows)"""
@@ -515,7 +517,7 @@ class SettingsWindow:
         ttk.Button(
             btn_frame,
             text="Cancel",
-            command=self.root.destroy,
+            command=self._on_close,
             width=12
         ).pack(side="right", padx=(0, 5))
 
@@ -570,8 +572,42 @@ class SettingsWindow:
 
             self.settings.save_settings()
             if self.app:
-                self.app.last_brightness_state = None
                 self.app.last_focused_window = None
-            self.root.destroy()
+            self._on_close()
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
+
+    def _cleanup_vars(self):
+        """Clean up tkinter Variables to avoid threading issues on garbage collection.
+
+        By explicitly deleting the internal _tk reference, we prevent __del__ from
+        trying to call into the tk interpreter from the wrong thread during gc.
+        """
+        def neutralize_var(var):
+            """Remove tk reference from a Variable so __del__ becomes a no-op."""
+            if var is not None and hasattr(var, '_tk'):
+                var._tk = None
+
+        # Neutralize monitor vars
+        for var in self.monitor_vars.values():
+            neutralize_var(var)
+        self.monitor_vars.clear()
+
+        # Neutralize champion vars
+        for role_vars in self.champion_vars.values():
+            for var in role_vars.values():
+                neutralize_var(var)
+            role_vars.clear()
+        self.champion_vars.clear()
+
+        # Neutralize other vars
+        for attr in ('high_brightness_var', 'low_brightness_var',
+                     'dim_all_except_focused_var', 'startup_var'):
+            var = getattr(self, attr, None)
+            neutralize_var(var)
+            setattr(self, attr, None)
+
+    def _on_close(self):
+        """Handle window close - cleanup vars before destroying."""
+        self._cleanup_vars()
+        self.root.destroy()

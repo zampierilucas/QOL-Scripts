@@ -56,26 +56,12 @@ def clean_window_title(title):
 
 
 def set_brightness_side_monitors(brightness, monitor_ids):
-    """
-    Sets the brightness for any side monitors configured in settings
-    """
-    changed = []
-    unchanged = []
+    """Set brightness for the specified monitors."""
     for monitor_id in monitor_ids:
         try:
-            current_brightness = sbc.get_brightness(display=monitor_id)[0]
-            if current_brightness != brightness:
-                sbc.set_brightness(brightness, display=monitor_id)
-                changed.append(monitor_id)
-            else:
-                unchanged.append(monitor_id)
+            sbc.set_brightness(brightness, display=monitor_id)
         except Exception as e:
-            logger.error(f"Failed to set brightness for monitor ID {monitor_id}: {e}")
-    if logger.isEnabledFor(logging.DEBUG):
-        if changed:
-            logger.debug(f"Set brightness to {brightness} for: {', '.join(changed)}")
-        if unchanged:
-            logger.debug(f"Brightness already {brightness} for: {', '.join(unchanged)}")
+            logger.error(f"Failed to set brightness for {monitor_id}: {e}")
 
 
 def get_focused_monitor_info():

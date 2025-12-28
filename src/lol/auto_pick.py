@@ -139,7 +139,7 @@ class LoLAutoPick:
                     delay_sec = delay_ms / 1000.0
                     logger.debug(f"Scheduling auto-lock in {delay_sec:.1f}s")
                     self.lock_timer_task = asyncio.create_task(
-                        self._auto_lock_after_delay(delay_sec, current_champion)
+                        self._auto_lock_after_delay(delay_sec)
                     )
         elif not is_our_turn:
             # Not our turn anymore, cancel any pending timer
@@ -180,22 +180,43 @@ class LoLAutoPick:
             logger.debug("Cancelled auto-lock timer")
         self.lock_timer_task = None
 
-    async def _auto_lock_after_delay(self, delay_sec, champion_id):
-        """Wait for delay then lock the champion"""
+    async def _auto_lock_after_delay(self, delay_sec):
+        """Wait for delay then lock the currently hovered champion"""
         try:
             await asyncio.sleep(delay_sec)
 
             if self.locked_this_session:
                 return
 
-            if self.current_connection and self.current_action_id:
-                await self.current_connection.request(
-                    'patch',
-                    f'/lol-champ-select/v1/session/actions/{self.current_action_id}',
-                    data={'championId': champion_id, 'completed': True}
-                )
-                self.locked_this_session = True
-                logger.info(f"Auto-locked champion {champion_id}")
+            if not self.current_connection:
+                return
+
+            # Fetch current session to get the champion the user has hovered
+            session = await self.current_connection.request(
+                'get', '/lol-champ-select/v1/session'
+            )
+            session_data = await session.json()
+
+            local_cell_id = session_data.get('localPlayerCellId')
+            actions = session_data.get('actions', [])
+
+            # Find current pick action and its champion
+            for action_group in actions:
+                for action in action_group:
+                    if (action.get('actorCellId') == local_cell_id and
+                        action.get('type') == 'pick' and
+                        not action.get('completed', False)):
+                        champion_id = action.get('championId', 0)
+                        action_id = action.get('id')
+                        if champion_id > 0:
+                            await self.current_connection.request(
+                                'patch',
+                                f'/lol-champ-select/v1/session/actions/{action_id}',
+                                data={'championId': champion_id, 'completed': True}
+                            )
+                            self.locked_this_session = True
+                            logger.info(f"Auto-locked champion {champion_id}")
+                        return
         except asyncio.CancelledError:
             logger.debug("Auto-lock timer was cancelled")
         except Exception as e:

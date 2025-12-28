@@ -86,7 +86,6 @@ class QOLApp:
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
         self.last_focused_window = None
-        self.last_brightness_state = None
 
         # Create shared LCU connector with handlers
         self.lol_auto_accept = LoLAutoAccept(self.settings)
@@ -307,7 +306,8 @@ class QOLApp:
             self.running = False
             if self.settings_window:
                 try:
-                    self.settings_window.root.destroy()
+                    # Schedule destroy on the main thread to avoid tkinter threading issues
+                    self.settings_window.root.after(0, self.settings_window.root.destroy)
                 except Exception:
                     pass
             self.lcu_connector.stop()
@@ -344,7 +344,15 @@ class QOLApp:
                                 event_time_ms: wintypes.DWORD):
         """Callback for foreground window change events."""
         try:
-            focused = get_window_title(hwnd)
+            # Always get the actual foreground window, not the event's hwnd
+            # (EVENT_OBJECT_FOCUS can pass child controls, not top-level windows)
+            foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not foreground_hwnd:
+                return  # No foreground window - transient state
+            focused = get_window_title(foreground_hwnd)
+            # Skip transient windows (empty title, Alt+Tab switcher, etc.)
+            if not focused or focused in ('Task Switching', 'DesktopWindowXamlSource'):
+                return
 
             if focused != self.last_focused_window:
                 self.last_focused_window = focused
@@ -354,23 +362,18 @@ class QOLApp:
                     games_list = self.settings.data['games_to_dimm']
                     cleaned_focused = clean_window_title(focused)
                     is_game_focused = cleaned_focused in games_list
-                    brightness_state = (is_game_focused, self.settings.data["dim_all_except_focused"])
+                    dim_all_mode = self.settings.data["dim_all_except_focused"]
+                    brightness_settings = self.settings.data["monitor_brightness"]
 
-                    if brightness_state != self.last_brightness_state:
-                        self.last_brightness_state = brightness_state
-
-                        dim_all_mode = self.settings.data["dim_all_except_focused"]
-                        brightness_settings = self.settings.data["monitor_brightness"]
-
-                        if is_game_focused:
-                            monitors_to_dim = (get_all_monitor_serials_except_focused()
-                                               if dim_all_mode
-                                               else self.settings.data["dimmable_monitors"])
-                            logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
-                            set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
-                        else:
-                            logger.debug("Game unfocused - restoring all monitors")
-                            set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
+                    if is_game_focused:
+                        monitors_to_dim = (get_all_monitor_serials_except_focused()
+                                           if dim_all_mode
+                                           else self.settings.data["dimmable_monitors"])
+                        logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
+                        set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
+                    else:
+                        logger.debug("Game unfocused - restoring all monitors")
+                        set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
         except Exception as e:
             logger.error(f"Error in foreground change handler: {e}")
 
@@ -391,6 +394,10 @@ class QOLApp:
                     self._on_foreground_change,
                     HookEvent.OBJECT_FOCUS
                 )
+                self._switch_end_hook = set_win_event_hook(
+                    self._on_foreground_change,
+                    HookEvent.SYSTEM_SWITCHEND
+                )
                 logger.debug("Focus monitor hooks registered")
                 _run_message_loop()
         except Exception as e:
@@ -402,3 +409,5 @@ class QOLApp:
                 self._minimize_end_hook.unhook()
             if hasattr(self, '_object_focus_hook') and self._object_focus_hook:
                 self._object_focus_hook.unhook()
+            if hasattr(self, '_switch_end_hook') and self._switch_end_hook:
+                self._switch_end_hook.unhook()
