@@ -3,6 +3,7 @@
 ## Overview
 A Windows system tray application that provides quality-of-life automation for gaming:
 - League of Legends automation (auto accept, auto pick, auto lock)
+- CS2 automation (auto accept)
 - Automatic monitor brightness adjustments when playing games
 
 ## Features
@@ -11,6 +12,11 @@ A Windows system tray application that provides quality-of-life automation for g
 - **Auto Accept** - Automatically accepts match queue pop-ups via the game's API
 - **Auto Pick** - Automatically hovers your configured champion based on assigned role (supports primary and secondary picks per role)
 - **Auto Lock** - Automatically locks in your champion when the timer is below 5 seconds
+
+### CS2
+- **Auto Accept** - Automatically accepts match queue pop-ups by monitoring the CS2 console log
+  - Requires `-condebug` in CS2 Steam launch options (automatically added if missing)
+  - A tray warning appears if CS2 needs to be restarted to apply the flag; it clears once active
 
 ### Monitor Dimming
 - Automatically dims secondary monitors when a configured game is in focus
@@ -49,6 +55,7 @@ A Windows system tray application that provides quality-of-life automation for g
    - Toggle **LoL - Auto Accept** on/off
    - Toggle **LoL - Auto Pick** on/off
    - Toggle **LoL - Auto Lock** on/off
+   - Toggle **CS2 - Auto Accept** on/off
    - Toggle **Dimming** on/off
    - Open **Settings** to configure monitors, games, brightness levels, and default champions
    - View **About** for repository link
