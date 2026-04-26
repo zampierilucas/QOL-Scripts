@@ -191,6 +191,10 @@ class QOLApp:
                 exe_asset = next((a for a in assets if a["name"].endswith(".exe")), None)
                 self.latest_download_url = exe_asset["browser_download_url"] if exe_asset else None
                 logger.info(f"Update available: v{latest_tag} (current: v{VERSION})")
+                if getattr(sys, 'frozen', False) and self.settings.data.get("auto_update_enabled", False):
+                    logger.info("Auto-update enabled, applying update silently")
+                    self._do_update()
+                    return
                 self._rebuild_menu()
             else:
                 logger.debug(f"No update available (current: v{VERSION}, latest: v{latest_tag})")
@@ -288,6 +292,13 @@ class QOLApp:
 
     def _build_menu(self):
         """Build the tray menu items."""
+        def check_auto_update(_item):
+            return self.settings.data.get("auto_update_enabled", False)
+
+        def toggle_auto_update(_icon, _item):
+            self.settings.data["auto_update_enabled"] = not self.settings.data.get("auto_update_enabled", False)
+            self.settings.save_settings()
+
         def check_dimming(_item):
             return self.settings.data["dimming_enabled"]
 
@@ -382,6 +393,7 @@ class QOLApp:
                 toggle_dimming,
                 checked=check_dimming
             ),
+            pystray.MenuItem("Auto Update", toggle_auto_update, checked=check_auto_update),
             pystray.MenuItem("Settings", self.show_settings),
             pystray.MenuItem("About", open_about),
             pystray.Menu.SEPARATOR,

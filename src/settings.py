@@ -28,6 +28,7 @@ class Settings:
         "auto_pick_enabled": True,
         "auto_lock_enabled": True,
         "cs2_auto_accept_enabled": True,
+        "auto_update_enabled": False,
         "dim_all_except_focused": False,
         "default_champions": {
             "top": {"primary": None, "secondary": None},
