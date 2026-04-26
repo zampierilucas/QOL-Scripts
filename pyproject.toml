@@ -1,6 +1,6 @@
 [project]
 name = "QOL-Scripts"
-version = "1.4.5"
+version = "1.4.6"
 description = "Quality of Life scripts for Windows"
 requires-python = ">=3.11"
 dependencies = [
