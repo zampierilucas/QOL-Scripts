@@ -15,9 +15,14 @@ CS2_WINDOW_TITLE = "Counter-Strike 2"
 CS2_APP_ID = "730"
 
 # Console log pattern that indicates a match was found.
-# "CheckServerReservation: 1" is the first line logged when CS2 finds a match
-# and the accept popup appears. Subsequent lines use "CheckServerReservation: 2", "3", etc.
-MATCH_FOUND_PATTERN = "[Client] CheckServerReservation: 1"
+# CS2 logs: "[Client] CheckServerReservation: N @ =[A:1:SESSION_ID:PORT] (...)"
+# Each new accept banner gets a new session id and starts at N=1; subsequent
+# N=2, N=3 are status polls within the SAME banner. We dedup by session id so
+# defective polling never re-fires the click and so consecutive new banners
+# (e.g. when a player declines and a new match is found) both get clicked.
+MATCH_FOUND_RE = re.compile(
+    r"\[Client\] CheckServerReservation: 1 @ (=\[[^\]]+\])"
+)
 
 
 def _is_cs2_running() -> bool:
@@ -319,14 +324,17 @@ class CS2ConsoleWatcher:
                 if not line:
                     continue
 
-                if MATCH_FOUND_PATTERN in line:
+                m = MATCH_FOUND_RE.search(line)
+                if m:
+                    session_id = m.group(1)
                     logger.info(f"CS2 match found: {line}")
-                    self._notify_callbacks()
-                    break
+                    self._notify_callbacks(session_id)
+                    # No break — multiple distinct sessions in one chunk should
+                    # all fire; CS2AutoAccept dedups by session_id.
 
-    def _notify_callbacks(self):
+    def _notify_callbacks(self, session_id):
         for cb in self._callbacks:
             try:
-                cb()
+                cb(session_id)
             except Exception as e:
                 logger.error(f"Error in CS2 match callback: {e}")
