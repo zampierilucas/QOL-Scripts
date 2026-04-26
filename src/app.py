@@ -261,6 +261,18 @@ class QOLApp:
         self.cs2_condebug_missing = True
         self.cs2_condebug_fixed = was_fixed
         self._rebuild_menu()
+        Thread(target=self._show_condebug_popup, args=(was_fixed,), daemon=True).start()
+
+    def _show_condebug_popup(self, was_fixed: bool):
+        if was_fixed:
+            title = "QOL-Scripts: restart CS2"
+            msg = "CS2 auto-accept needs '-condebug' in Steam launch options.\n\nIt has been added automatically. Please restart CS2 for it to take effect."
+        else:
+            title = "QOL-Scripts: action required"
+            msg = "CS2 auto-accept needs '-condebug' in Steam launch options.\n\nCould not auto-add it. Right-click CS2 in Steam → Properties → Launch Options, add '-condebug', then restart CS2."
+        MB_OK = 0x0
+        MB_ICONINFORMATION = 0x40
+        ctypes.windll.user32.MessageBoxW(0, msg, title, MB_OK | MB_ICONINFORMATION)
 
     def _on_condebug_ok(self):
         """Called once console.log is confirmed active — -condebug is set and working."""

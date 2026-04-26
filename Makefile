@@ -14,7 +14,6 @@ all: verify build
 
 # Install dependencies
 install:
-	$(PYTHON) -m pip install -r requirements.txt
 	$(PYTHON) -m pip install -e ".[dev]" pyinstaller
 
 # Verify code quality (lint + dead code + compile check)

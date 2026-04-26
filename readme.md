@@ -16,7 +16,7 @@ A Windows system tray application that provides quality-of-life automation for g
 ### CS2
 - **Auto Accept** - Automatically accepts match queue pop-ups by monitoring the CS2 console log
   - Requires `-condebug` in CS2 Steam launch options (automatically added if missing)
-  - A tray warning appears if CS2 needs to be restarted to apply the flag; it clears once active
+  - A popup notifies you if CS2 needs to be restarted to apply the flag; a tray indicator backs it up until the flag is active
 
 ### Monitor Dimming
 - Automatically dims secondary monitors when a configured game is in focus
