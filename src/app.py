@@ -214,6 +214,10 @@ class QOLApp:
         """Open the GitHub releases page."""
         webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
 
+    def _refresh_updates(self, _icon=None, _item=None):
+        """Manually trigger an update check from the tray menu."""
+        Thread(target=self.check_for_updates, daemon=True).start()
+
     def _do_update(self, _icon=None, _item=None):
         """Download the new exe and relaunch via a swap script."""
         if not self.latest_download_url:
@@ -356,6 +360,7 @@ class QOLApp:
 
         menu_items = [
             pystray.MenuItem(f"{PROGRAM_NAME} v{VERSION}", None, enabled=False),
+            pystray.MenuItem("Check for updates", self._refresh_updates),
         ]
 
         # Add update available button if there's a new version
