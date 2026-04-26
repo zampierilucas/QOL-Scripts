@@ -3,7 +3,7 @@ name: Build and Release
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, try/build-optimizations ]
     tags:
       - 'v*'
   pull_request:
