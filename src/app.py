@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import tempfile
 import logging
 import base64
 import io
@@ -67,7 +68,7 @@ def _get_version():
 
 VERSION = _get_version()
 GITHUB_REPO = "zampierilucas/QOL-Scripts"
-UPDATE_CHECK_INTERVAL = 4 * 60 * 60  # 4 hours in seconds
+UPDATE_CHECK_INTERVAL = 30 * 60  # 30 minutes in seconds
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class QOLApp:
         # Update checker state (must be before create_tray_icon)
         self.update_available = False
         self.latest_version = None
+        self.latest_download_url = None
         self.cs2_condebug_missing = False
         self.cs2_condebug_fixed = False
 
@@ -185,6 +187,9 @@ class QOLApp:
             if latest > current:
                 self.latest_version = latest_tag
                 self.update_available = True
+                assets = data.get("assets", [])
+                exe_asset = next((a for a in assets if a["name"].endswith(".exe")), None)
+                self.latest_download_url = exe_asset["browser_download_url"] if exe_asset else None
                 logger.info(f"Update available: v{latest_tag} (current: v{VERSION})")
                 self._rebuild_menu()
             else:
@@ -204,6 +209,47 @@ class QOLApp:
     def _open_releases(self, _icon=None, _item=None):
         """Open the GitHub releases page."""
         webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
+
+    def _do_update(self, _icon=None, _item=None):
+        """Download the new exe and relaunch via a swap script."""
+        if not self.latest_download_url:
+            self._open_releases()
+            return
+        Thread(target=self._run_update, daemon=True).start()
+
+    def _run_update(self):
+        try:
+            installed_exe = self.get_installed_exe_path()
+            logger.info(f"Downloading update from {self.latest_download_url}")
+
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".exe", prefix="QOL-update-")
+            os.close(tmp_fd)
+
+            with requests.get(self.latest_download_url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        f.write(chunk)
+
+            bat_fd, bat_path = tempfile.mkstemp(suffix=".bat", prefix="QOL-update-")
+            pid = os.getpid()
+            bat_script = (
+                f"@echo off\n"
+                f":wait\n"
+                f"tasklist /fi \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul\n"
+                f"if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\n"
+                f"move /y \"{tmp_path}\" \"{installed_exe}\"\n"
+                f"start \"\" \"{installed_exe}\"\n"
+                f"del \"%~f0\"\n"
+            )
+            with os.fdopen(bat_fd, "w") as f:
+                f.write(bat_script)
+
+            logger.info("Launching update script and exiting")
+            os.startfile(bat_path)
+            self.stop()
+        except Exception as e:
+            logger.error(f"Update failed: {e}")
 
     def _on_condebug_missing(self, was_fixed: bool):
         """Called when CS2 is running but -condebug is not set.
@@ -291,12 +337,13 @@ class QOLApp:
 
         # Add update available button if there's a new version
         if self.update_available and self.latest_version:
-            menu_items.append(
-                pystray.MenuItem(
-                    f"Update available: v{self.latest_version}",
-                    self._open_releases
-                )
-            )
+            if getattr(sys, 'frozen', False) and self.latest_download_url:
+                update_action = self._do_update
+                update_label = f"Update & Restart → v{self.latest_version}"
+            else:
+                update_action = self._open_releases
+                update_label = f"Update available: v{self.latest_version}"
+            menu_items.append(pystray.MenuItem(update_label, update_action))
 
         menu_items.extend([
             pystray.Menu.SEPARATOR,
