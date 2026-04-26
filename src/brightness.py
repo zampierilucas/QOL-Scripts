@@ -56,8 +56,14 @@ def clean_window_title(title):
 
 
 def set_brightness_side_monitors(brightness, monitor_ids):
-    """Set brightness for the specified monitors."""
+    """Set brightness for the specified monitors.
+
+    Skips falsy ids — passing display=None to sbc would target ALL monitors,
+    causing unflagged monitors (like the main display) to dim unintentionally."""
     for monitor_id in monitor_ids:
+        if not monitor_id:
+            logger.debug("Skipping monitor with empty id (would target all monitors)")
+            continue
         try:
             sbc.set_brightness(brightness, display=monitor_id)
         except Exception as e:
