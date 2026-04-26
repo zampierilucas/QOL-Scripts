@@ -7,7 +7,7 @@ SPEC_FILE = $(SRC_DIR)/main.spec
 DIST_DIR = $(SRC_DIR)/dist
 BUILD_DIR = $(SRC_DIR)/build
 
-.PHONY: all verify lint compile build dist clean install help run debug
+.PHONY: all verify lint dead compile build dist clean install help run debug
 
 # Default target
 all: verify build
@@ -15,15 +15,19 @@ all: verify build
 # Install dependencies
 install:
 	$(PYTHON) -m pip install -r requirements.txt
-	$(PYTHON) -m pip install ruff pyinstaller
+	$(PYTHON) -m pip install -e ".[dev]" pyinstaller
 
-# Verify code quality (lint + compile check)
-verify: lint compile
+# Verify code quality (lint + dead code + compile check)
+verify: lint dead compile
 	@echo "Verification complete!"
 
-# Lint with ruff (fast Python linter)
+# Lint with ruff (config in pyproject.toml)
 lint:
-	$(PYTHON) -m ruff check $(SRC_DIR) --ignore E501,E402
+	$(PYTHON) -m ruff check $(SRC_DIR)
+
+# Dead code detection with vulture (config in pyproject.toml)
+dead:
+	$(PYTHON) -m vulture $(SRC_DIR)
 
 # Compile check for syntax errors
 compile:
@@ -57,8 +61,9 @@ clean:
 help:
 	@echo "Available targets:"
 	@echo "  make install  - Install dependencies (including dev tools)"
-	@echo "  make verify   - Run linting and compile checks"
+	@echo "  make verify   - Run linting, dead code check, and compile check"
 	@echo "  make lint     - Run ruff linter only"
+	@echo "  make dead     - Run vulture dead code detection only"
 	@echo "  make compile  - Check for Python syntax errors"
 	@echo "  make run      - Run directly with Python (no compile)"
 	@echo "  make debug    - Run with --debug flag"

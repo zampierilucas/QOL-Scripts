@@ -1,5 +1,6 @@
 import json
 import pathlib
+import threading
 import appdirs
 
 from brightness import clean_window_title
@@ -26,6 +27,7 @@ class Settings:
         "auto_accept_enabled": True,
         "auto_pick_enabled": True,
         "auto_lock_enabled": True,
+        "cs2_auto_accept_enabled": True,
         "dim_all_except_focused": False,
         "default_champions": {
             "top": {"primary": None, "secondary": None},
@@ -38,6 +40,7 @@ class Settings:
 
     def __init__(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
         self.load_settings()
 
     def load_settings(self):
@@ -71,5 +74,6 @@ class Settings:
             self.save_settings()
 
     def save_settings(self):
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(self.data, f, indent=4)
+        with self._lock:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.data, f, indent=4)

@@ -44,6 +44,7 @@ from brightness import (
     clean_window_title, init_monitors_cache, get_all_monitor_serials
 )
 from lol import LoLAutoAccept, LoLAutoPick, SharedLCUConnector
+from cs2 import CS2AutoAccept, CS2ConsoleWatcher
 from settings_window import SettingsWindow
 
 try:
@@ -78,6 +79,8 @@ class QOLApp:
         # Update checker state (must be before create_tray_icon)
         self.update_available = False
         self.latest_version = None
+        self.cs2_condebug_missing = False
+        self.cs2_condebug_fixed = False
 
         self.create_tray_icon()
         self.running = True
@@ -96,6 +99,13 @@ class QOLApp:
         self.lcu_connector.register_close_callback(lambda _: self.lol_auto_accept.on_disconnect())
         self.lcu_connector.register_close_callback(lambda _: self.lol_auto_pick.on_disconnect())
 
+        # Create CS2 console watcher with auto-accept handler
+        self.cs2_auto_accept = CS2AutoAccept(self.settings)
+        self.cs2_watcher = CS2ConsoleWatcher()
+        self.cs2_watcher.register_callback(self.cs2_auto_accept.on_match_found)
+        self.cs2_watcher.register_condebug_missing_callback(self._on_condebug_missing)
+        self.cs2_watcher.register_condebug_ok_callback(self._on_condebug_ok)
+
         self.settings_requested = False
         self.settings_window = None
         self._focus_monitor_thread_id = None
@@ -107,7 +117,7 @@ class QOLApp:
         except Exception as e:
             logger.error(f"Failed to initialize monitors on startup: {e}")
 
-    def signal_handler(self, signum, frame):
+    def signal_handler(self, _signum, _frame):
         logger.debug("Received signal to terminate. Cleaning up...")
         self.stop()
 
@@ -127,7 +137,7 @@ class QOLApp:
         exe_name = os.path.basename(self.get_executable_path())
         return os.path.join(self.install_dir, exe_name)
 
-    def toggle_startup(self, icon, item):
+    def toggle_startup(self, _icon, _item):
         """Toggle startup by installing app and managing shortcut"""
         try:
             if self.is_startup_enabled():
@@ -191,9 +201,22 @@ class QOLApp:
                     break
                 time.sleep(1)
 
-    def _open_releases(self, icon=None, item=None):
+    def _open_releases(self, _icon=None, _item=None):
         """Open the GitHub releases page."""
         webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
+
+    def _on_condebug_missing(self, was_fixed: bool):
+        """Called when CS2 is running but -condebug is not set.
+        Even if we fixed localconfig.vdf, CS2 needs a restart — keep warning until then."""
+        self.cs2_condebug_missing = True
+        self.cs2_condebug_fixed = was_fixed
+        self._rebuild_menu()
+
+    def _on_condebug_ok(self):
+        """Called once console.log is confirmed active — -condebug is set and working."""
+        self.cs2_condebug_missing = False
+        self.cs2_condebug_fixed = False
+        self._rebuild_menu()
 
     def _rebuild_menu(self):
         """Rebuild the tray menu (used when update becomes available)."""
@@ -219,19 +242,22 @@ class QOLApp:
 
     def _build_menu(self):
         """Build the tray menu items."""
-        def check_dimming(item):
+        def check_dimming(_item):
             return self.settings.data["dimming_enabled"]
 
-        def check_auto_accept(item):
+        def check_auto_accept(_item):
             return self.settings.data["auto_accept_enabled"]
 
-        def check_auto_pick(item):
+        def check_auto_pick(_item):
             return self.settings.data["auto_pick_enabled"]
 
-        def check_auto_lock(item):
+        def check_cs2_auto_accept(_item):
+            return self.settings.data.get("cs2_auto_accept_enabled", True)
+
+        def check_auto_lock(_item):
             return self.settings.data.get("auto_lock_enabled", True)
 
-        def toggle_dimming(icon, item):
+        def toggle_dimming(_icon, _item):
             self.settings.data["dimming_enabled"] = not self.settings.data["dimming_enabled"]
             self.settings.save_settings()
             if not self.settings.data["dimming_enabled"]:
@@ -240,19 +266,23 @@ class QOLApp:
                     self.settings.data["dimmable_monitors"]
                 )
 
-        def toggle_auto_accept(icon, item):
+        def toggle_auto_accept(_icon, _item):
             self.settings.data["auto_accept_enabled"] = not self.settings.data["auto_accept_enabled"]
             self.settings.save_settings()
 
-        def toggle_auto_pick(icon, item):
+        def toggle_auto_pick(_icon, _item):
             self.settings.data["auto_pick_enabled"] = not self.settings.data["auto_pick_enabled"]
             self.settings.save_settings()
 
-        def toggle_auto_lock(icon, item):
+        def toggle_cs2_auto_accept(_icon, _item):
+            self.settings.data["cs2_auto_accept_enabled"] = not self.settings.data.get("cs2_auto_accept_enabled", True)
+            self.settings.save_settings()
+
+        def toggle_auto_lock(_icon, _item):
             self.settings.data["auto_lock_enabled"] = not self.settings.data.get("auto_lock_enabled", True)
             self.settings.save_settings()
 
-        def open_about(icon, item):
+        def open_about(_icon, _item):
             webbrowser.open("https://github.com/zampierilucas/QOL-Scripts")
 
         menu_items = [
@@ -286,6 +316,21 @@ class QOLApp:
                 checked=check_auto_lock
             ),
             pystray.MenuItem(
+                "CS2 - Auto Accept",
+                toggle_cs2_auto_accept,
+                checked=check_cs2_auto_accept
+            ),
+            *(
+                [pystray.MenuItem(
+                    "  CS2: restart CS2 to apply -condebug" if self.cs2_condebug_fixed
+                    else "  CS2: add -condebug to Steam launch options",
+                    None,
+                    enabled=False
+                )]
+                if self.cs2_condebug_missing and self.settings.data.get("cs2_auto_accept_enabled", True)
+                else []
+            ),
+            pystray.MenuItem(
                 "Dimming",
                 toggle_dimming,
                 checked=check_dimming
@@ -298,10 +343,10 @@ class QOLApp:
 
         self._menu = pystray.Menu(*menu_items)
 
-    def show_settings(self, icon=None, item=None):
+    def show_settings(self, _icon=None, _item=None):
         self.settings_requested = True
 
-    def stop(self, icon=None, item=None):
+    def stop(self, _icon=None, _item=None):
         if self.running:
             self.running = False
             if self.settings_window:
@@ -311,6 +356,7 @@ class QOLApp:
                 except Exception:
                     pass
             self.lcu_connector.stop()
+            self.cs2_watcher.stop()
             # Stop the focus monitor thread by posting WM_QUIT to its message loop
             if self._focus_monitor_thread_id:
                 WM_QUIT = 0x0012
@@ -326,6 +372,7 @@ class QOLApp:
 
     def run(self):
         self.lcu_connector.start()
+        self.cs2_watcher.start()
         Thread(target=self._focus_monitor_loop, daemon=True).start()
         Thread(target=self._update_check_loop, daemon=True).start()
         Thread(target=self.icon.run, daemon=True).start()
@@ -338,10 +385,10 @@ class QOLApp:
                 self.settings_window = None
             time.sleep(0.1)
 
-    def _on_foreground_change(self, win_event_hook_handle, event_id: int,
-                                hwnd: wintypes.HWND, id_object: wintypes.LONG,
-                                id_child: wintypes.LONG, event_thread_id: wintypes.DWORD,
-                                event_time_ms: wintypes.DWORD):
+    def _on_foreground_change(self, _win_event_hook_handle, _event_id: int,
+                                hwnd: wintypes.HWND, _id_object: wintypes.LONG,
+                                _id_child: wintypes.LONG, _event_thread_id: wintypes.DWORD,
+                                _event_time_ms: wintypes.DWORD):
         """Callback for foreground window change events."""
         try:
             # Always get the actual foreground window, not the event's hwnd

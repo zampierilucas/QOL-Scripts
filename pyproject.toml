@@ -1,8 +1,26 @@
 [project]
 name = "QOL-Scripts"
-version = "1.3.5"
+version = "1.4.0"
 description = "Quality of Life scripts for Windows"
 requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = [
+    "E402",  # Module level import not at top — intentional in main.py and app.py
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "vulture",
+]
+
+[tool.vulture]
+paths = ["src"]
+min_confidence = 100  # only show definite unused code (callbacks/decorators are false positives at 60%)
 
 [tool.pyinstaller]
 # Configuration reference for PyInstaller (actual build uses main.spec)
