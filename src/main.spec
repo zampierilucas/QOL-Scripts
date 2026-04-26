@@ -43,6 +43,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
+    optimize=2,
 )
 pyz = PYZ(a.pure)
 
@@ -56,8 +57,12 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    upx_exclude=[],
+    upx=True,
+    upx_exclude=[
+        'vcruntime140.dll',
+        'python311.dll',
+        'python312.dll',
+    ],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,

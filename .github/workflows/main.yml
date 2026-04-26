@@ -41,6 +41,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install . pyinstaller
 
+      - name: Install UPX
+        run: choco install upx -y --no-progress
+
       - name: Build executable
         shell: bash
         run: |
