@@ -213,7 +213,6 @@ class CS2ConsoleWatcher:
         self.running = False
         self._callbacks = []
         self._condebug_missing_callbacks = []
-        self._condebug_ok_callbacks = []
         self._cs2_path = None
         self._thread = None
 
@@ -223,10 +222,6 @@ class CS2ConsoleWatcher:
     def register_condebug_missing_callback(self, callback):
         """Called when CS2 is running but -condebug is not set (after auto-fix attempt)."""
         self._condebug_missing_callbacks.append(callback)
-
-    def register_condebug_ok_callback(self, callback):
-        """Called when CS2 is running with -condebug active (clears any prior warning)."""
-        self._condebug_ok_callbacks.append(callback)
 
     def start(self):
         if not self.running:
@@ -293,12 +288,6 @@ class CS2ConsoleWatcher:
 
         if not self.running or not _is_cs2_running():
             return
-
-        for cb in self._condebug_ok_callbacks:
-            try:
-                cb()
-            except Exception as e:
-                logger.error(f"Error in condebug ok callback: {e}")
 
         logger.debug(f"Tailing console.log at: {log_path}")
         last_size = os.path.getsize(log_path)

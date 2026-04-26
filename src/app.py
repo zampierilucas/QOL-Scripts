@@ -73,6 +73,41 @@ UPDATE_CHECK_INTERVAL = 30 * 60  # 30 minutes in seconds
 logger = logging.getLogger(__name__)
 
 
+def _enable_dark_menus_process():
+    """Opt the PROCESS into dark-mode capability via undocumented uxtheme ordinals.
+    Per-window opt-in via _enable_dark_menus_window is also required."""
+    try:
+        uxtheme = ctypes.WinDLL("uxtheme.dll")
+        # Ordinals must be passed as integers, not "#N" strings, when using WINFUNCTYPE
+        SetPreferredAppMode = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int)((135, uxtheme))
+        RefreshImmersiveColorPolicyState = ctypes.WINFUNCTYPE(None)((104, uxtheme))
+        SetPreferredAppMode(1)  # AllowDark — follow system theme
+        RefreshImmersiveColorPolicyState()
+        logger.debug("Process dark-mode capability enabled")
+    except Exception as e:
+        logger.debug(f"Could not set process dark-mode: {e}")
+
+
+def _enable_dark_menus_window(hwnd):
+    """Opt a specific HWND into dark-mode rendering. Each HWND that owns or
+    hosts a popup menu must be opted in individually."""
+    if not hwnd:
+        return
+    try:
+        uxtheme = ctypes.WinDLL("uxtheme.dll")
+        AllowDarkModeForWindow = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.BOOL
+        )((133, uxtheme))
+        AllowDarkModeForWindow(hwnd, True)
+        # Apply DarkMode_Explorer visual style so menus inherit dark theming
+        ctypes.windll.uxtheme.SetWindowTheme(hwnd, "DarkMode_Explorer", None)
+        # Force theme refresh
+        WM_THEMECHANGED = 0x031A
+        ctypes.windll.user32.SendMessageW(hwnd, WM_THEMECHANGED, 0, 0)
+    except Exception as e:
+        logger.debug(f"Could not enable dark mode for hwnd {hwnd}: {e}")
+
+
 class QOLApp:
     def __init__(self):
         self.settings = Settings()
@@ -81,9 +116,8 @@ class QOLApp:
         self.update_available = False
         self.latest_version = None
         self.latest_download_url = None
-        self.cs2_condebug_missing = False
-        self.cs2_condebug_fixed = False
 
+        _enable_dark_menus_process()
         self.create_tray_icon()
         self.running = True
         self.install_dir = os.path.join(os.environ['LOCALAPPDATA'], 'Programs', PROGRAM_NAME)
@@ -106,7 +140,6 @@ class QOLApp:
         self.cs2_watcher = CS2ConsoleWatcher()
         self.cs2_watcher.register_callback(self.cs2_auto_accept.on_match_found)
         self.cs2_watcher.register_condebug_missing_callback(self._on_condebug_missing)
-        self.cs2_watcher.register_condebug_ok_callback(self._on_condebug_ok)
 
         self.settings_requested = False
         self.settings_window = None
@@ -210,10 +243,6 @@ class QOLApp:
                     break
                 time.sleep(1)
 
-    def _open_releases(self, _icon=None, _item=None):
-        """Open the GitHub releases page."""
-        webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
-
     def _refresh_updates(self, _icon=None, _item=None):
         """Manually trigger an update check from the tray menu."""
         Thread(target=self.check_for_updates, daemon=True).start()
@@ -221,7 +250,7 @@ class QOLApp:
     def _do_update(self, _icon=None, _item=None):
         """Download the new exe and relaunch via a swap script."""
         if not self.latest_download_url:
-            self._open_releases()
+            logger.warning("No download URL available for update")
             return
         Thread(target=self._run_update, daemon=True).start()
 
@@ -260,11 +289,7 @@ class QOLApp:
             logger.error(f"Update failed: {e}")
 
     def _on_condebug_missing(self, was_fixed: bool):
-        """Called when CS2 is running but -condebug is not set.
-        Even if we fixed localconfig.vdf, CS2 needs a restart — keep warning until then."""
-        self.cs2_condebug_missing = True
-        self.cs2_condebug_fixed = was_fixed
-        self._rebuild_menu()
+        """Called when CS2 is running but -condebug is not set."""
         Thread(target=self._show_condebug_popup, args=(was_fixed,), daemon=True).start()
 
     def _show_condebug_popup(self, was_fixed: bool):
@@ -277,12 +302,6 @@ class QOLApp:
         MB_OK = 0x0
         MB_ICONINFORMATION = 0x40
         ctypes.windll.user32.MessageBoxW(0, msg, title, MB_OK | MB_ICONINFORMATION)
-
-    def _on_condebug_ok(self):
-        """Called once console.log is confirmed active — -condebug is set and working."""
-        self.cs2_condebug_missing = False
-        self.cs2_condebug_fixed = False
-        self._rebuild_menu()
 
     def _rebuild_menu(self):
         """Rebuild the tray menu (used when update becomes available)."""
@@ -358,22 +377,18 @@ class QOLApp:
         def open_about(_icon, _item):
             webbrowser.open("https://github.com/zampierilucas/QOL-Scripts")
 
+        # Single dual-function version row: ↻ to check for updates, or ⬇ to apply one
+        can_self_update = (self.update_available and self.latest_version
+                           and getattr(sys, 'frozen', False) and self.latest_download_url)
+        if can_self_update:
+            version_action = self._do_update
+            version_label = f"{PROGRAM_NAME} v{VERSION} → v{self.latest_version} ⬇"
+        else:
+            version_action = self._refresh_updates
+            version_label = f"{PROGRAM_NAME} v{VERSION} ↻"
+
         menu_items = [
-            pystray.MenuItem(f"{PROGRAM_NAME} v{VERSION}", None, enabled=False),
-            pystray.MenuItem("Check for updates", self._refresh_updates),
-        ]
-
-        # Add update available button if there's a new version
-        if self.update_available and self.latest_version:
-            if getattr(sys, 'frozen', False) and self.latest_download_url:
-                update_action = self._do_update
-                update_label = f"Update & Restart → v{self.latest_version}"
-            else:
-                update_action = self._open_releases
-                update_label = f"Update available: v{self.latest_version}"
-            menu_items.append(pystray.MenuItem(update_label, update_action))
-
-        menu_items.extend([
+            pystray.MenuItem(version_label, version_action),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "LoL - Auto Accept",
@@ -395,16 +410,6 @@ class QOLApp:
                 toggle_cs2_auto_accept,
                 checked=check_cs2_auto_accept
             ),
-            *(
-                [pystray.MenuItem(
-                    "  CS2: restart CS2 to apply -condebug" if self.cs2_condebug_fixed
-                    else "  CS2: add -condebug to Steam launch options",
-                    None,
-                    enabled=False
-                )]
-                if self.cs2_condebug_missing and self.settings.data.get("cs2_auto_accept_enabled", True)
-                else []
-            ),
             pystray.MenuItem(
                 "Dimming",
                 toggle_dimming,
@@ -414,8 +419,8 @@ class QOLApp:
             pystray.MenuItem("Settings", self.show_settings),
             pystray.MenuItem("About", open_about),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Exit", self.stop)
-        ])
+            pystray.MenuItem("Exit", self.stop),
+        ]
 
         self._menu = pystray.Menu(*menu_items)
 
@@ -452,6 +457,7 @@ class QOLApp:
         Thread(target=self._focus_monitor_loop, daemon=True).start()
         Thread(target=self._update_check_loop, daemon=True).start()
         Thread(target=self.icon.run, daemon=True).start()
+        Thread(target=self._enable_dark_menus_when_ready, daemon=True).start()
 
         while self.running:
             if self.settings_requested:
@@ -460,6 +466,21 @@ class QOLApp:
                 self.settings_window.root.mainloop()
                 self.settings_window = None
             time.sleep(0.1)
+
+    def _enable_dark_menus_when_ready(self):
+        """Wait for pystray to create its HWNDs, then opt them into dark mode.
+        pystray creates two windows: _hwnd (foreground when menu shown) and
+        _menu_hwnd (the popup-menu owner). Both need the opt-in."""
+        for _ in range(50):  # up to ~5 seconds
+            hwnd = getattr(self.icon, "_hwnd", None)
+            menu_hwnd = getattr(self.icon, "_menu_hwnd", None)
+            if hwnd and menu_hwnd:
+                _enable_dark_menus_window(hwnd)
+                _enable_dark_menus_window(menu_hwnd)
+                logger.debug(f"Dark menu opt-in applied to hwnd={hwnd} menu_hwnd={menu_hwnd}")
+                return
+            time.sleep(0.1)
+        logger.debug("pystray HWNDs never appeared; skipping dark menu opt-in")
 
     def _on_foreground_change(self, _win_event_hook_handle, _event_id: int,
                                 hwnd: wintypes.HWND, _id_object: wintypes.LONG,
