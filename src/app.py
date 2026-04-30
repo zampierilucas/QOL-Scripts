@@ -116,6 +116,7 @@ class QOLApp:
         self.update_available = False
         self.latest_version = None
         self.latest_download_url = None
+        self.latest_download_size = 0
 
         _enable_dark_menus_process()
         self.create_tray_icon()
@@ -223,6 +224,7 @@ class QOLApp:
                 assets = data.get("assets", [])
                 exe_asset = next((a for a in assets if a["name"].endswith(".exe")), None)
                 self.latest_download_url = exe_asset["browser_download_url"] if exe_asset else None
+                self.latest_download_size = exe_asset.get("size", 0) if exe_asset else 0
                 logger.info(f"Update available: v{latest_tag} (current: v{VERSION})")
                 if getattr(sys, 'frozen', False) and self.settings.data.get("auto_update_enabled", False):
                     logger.info("Auto-update enabled, applying update silently")
@@ -264,9 +266,28 @@ class QOLApp:
 
             with requests.get(self.latest_download_url, stream=True, timeout=60) as r:
                 r.raise_for_status()
+                # Trust the github API asset size if present, otherwise fall back to Content-Length
+                expected_size = self.latest_download_size or int(r.headers.get("Content-Length", 0))
+                bytes_written = 0
                 with open(tmp_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=65536):
                         f.write(chunk)
+                        bytes_written += len(chunk)
+
+            # Defense: if the download was truncated mid-stream, the resulting exe
+            # boots into PyInstaller bootstrap and crashes ("base_library.zip not
+            # found in _MEI*"). Verify the size before letting the swap script run.
+            if expected_size and bytes_written != expected_size:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                logger.error(
+                    f"Update download incomplete: got {bytes_written} bytes, "
+                    f"expected {expected_size}. Aborting swap so the running "
+                    f"version is not replaced with a corrupted exe."
+                )
+                return
 
             bat_fd, bat_path = tempfile.mkstemp(suffix=".bat", prefix="QOL-update-")
             pid = os.getpid()
