@@ -1,5 +1,6 @@
 import ctypes
 import logging
+from threading import Thread
 
 logger = logging.getLogger(__name__)
 
@@ -8,6 +9,7 @@ _NVAPI_INITIALIZE = 0x0150E828
 _NVAPI_ENUM_DISPLAY_HANDLE = 0x9ABDD40D
 _NVAPI_GET_DVC_INFO = 0x4085DE45
 _NVAPI_SET_DVC_LEVEL = 0x172409B4
+_NVAPI_GET_ASSOC_DISPLAY_NAME = 0x22A78B05
 
 _MAX_DISPLAYS = 16
 
@@ -94,6 +96,35 @@ def get_display_count() -> int:
     return len(_display_handles)
 
 
+def get_displays() -> list[tuple[int, str]]:
+    """Return [(nvapi_index, gdi_name), ...] for each NVIDIA-attached display.
+
+    gdi_name is the Windows GDI device path like '\\\\.\\DISPLAY1', or '' if
+    the lookup failed."""
+    if not _initialized and not init_nvapi():
+        return []
+
+    get_name_fn = _query(
+        _NVAPI_GET_ASSOC_DISPLAY_NAME,
+        ctypes.c_int32,
+        ctypes.c_void_p,
+        ctypes.c_char * 64,
+    )
+
+    out = []
+    for i, handle in enumerate(_display_handles):
+        gdi_name = ""
+        if get_name_fn:
+            buf = (ctypes.c_char * 64)()
+            try:
+                if get_name_fn(handle, buf) == 0:
+                    gdi_name = buf.value.decode('ascii', errors='ignore')
+            except Exception as e:
+                logger.debug(f"GetAssociatedNvidiaDisplayName failed for {i}: {e}")
+        out.append((i, gdi_name))
+    return out
+
+
 def _get_dvc_info(display_index: int):
     """Return (currentLevel, minLevel, maxLevel) or None."""
     if display_index >= len(_display_handles):
@@ -153,3 +184,48 @@ def set_vibrance(level_percent: int, display_indices: list | None = None) -> boo
         else:
             logger.debug(f"Display {idx}: DVC → {target} ({level_percent}%)")
     return ok
+
+
+class VibranceFocusConsumer:
+    """Daemon thread that subscribes to a FocusMonitor and switches NVIDIA
+    digital vibrance between 'game' and 'default' levels based on the
+    foreground window."""
+
+    def __init__(self, settings, focus_monitor):
+        self.settings = settings
+        self.focus_monitor = focus_monitor
+        self._thread = None
+        self._running = False
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = Thread(target=self._run, daemon=True, name="vibrance-focus")
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+
+    def _run(self):
+        sub = self.focus_monitor.subscribe()
+        while self._running:
+            title = sub.wait()
+            if title is None:
+                return
+            try:
+                self._apply(title)
+            except Exception as e:
+                logger.error(f"Vibrance consumer error: {e}")
+
+    def _apply(self, focused_title: str):
+        if not self.settings.data.get("vibrance_enabled", False):
+            return
+        vibrance_games = self.settings.data.get("games_vibrance", [])
+        is_vibrance_game = focused_title in vibrance_games
+        vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
+        level = (self.settings.data.get("vibrance_game_level", 75)
+                 if is_vibrance_game
+                 else self.settings.data.get("vibrance_default_level", 50))
+        logger.debug(f"Vibrance: {'game' if is_vibrance_game else 'default'} → {level}%")
+        set_vibrance(level, vibrance_displays)

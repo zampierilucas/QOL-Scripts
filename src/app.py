@@ -16,9 +16,6 @@ from packaging import version as pkg_version
 import requests
 import pystray
 from PIL import Image
-from win32_window_monitor import (
-    init_com, set_win_event_hook, get_window_title, HookEvent
-)
 import ctypes
 from ctypes import wintypes
 import winshell
@@ -26,25 +23,12 @@ from win32com.client import Dispatch
 
 from settings import Settings, PROGRAM_NAME
 
-
-def _run_message_loop():
-    """Run WIN32 message loop until WM_QUIT is received.
-
-    Workaround for win32-window-monitor bug using TranslateMessageW
-    which doesn't exist (should be TranslateMessage).
-    """
-    user32 = ctypes.windll.user32
-    msg = wintypes.MSG()
-    while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) != 0:
-        user32.TranslateMessage(ctypes.byref(msg))
-        user32.DispatchMessageW(ctypes.byref(msg))
-
-
 from brightness import (
-    set_brightness_side_monitors, get_all_monitor_serials_except_focused,
-    clean_window_title, init_monitors_cache, get_all_monitor_serials
+    set_brightness_side_monitors, init_monitors_cache, get_all_monitor_serials,
+    BrightnessFocusConsumer
 )
-from vibrance import init_nvapi, set_vibrance
+from vibrance import init_nvapi, set_vibrance, VibranceFocusConsumer
+from focus_monitor import FocusMonitor
 from lol import LoLAutoAccept, LoLAutoPick, SharedLCUConnector
 from cs2 import CS2AutoAccept, CS2ConsoleWatcher
 from settings_window import SettingsWindow
@@ -126,7 +110,6 @@ class QOLApp:
         self.startup_shortcut = os.path.join(winshell.startup(), f"{PROGRAM_NAME}.lnk")
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
-        self.last_focused_window = None
 
         # Create shared LCU connector with handlers
         self.lol_auto_accept = LoLAutoAccept(self.settings)
@@ -143,9 +126,15 @@ class QOLApp:
         self.cs2_watcher.register_callback(self.cs2_auto_accept.on_match_found)
         self.cs2_watcher.register_condebug_missing_callback(self._on_condebug_missing)
 
+        # Shared focus monitor: one daemon publishes the focused window;
+        # each feature has its own consumer thread that subscribes and reacts
+        # independently.
+        self.focus_monitor = FocusMonitor()
+        self.brightness_consumer = BrightnessFocusConsumer(self.settings, self.focus_monitor)
+        self.vibrance_consumer = VibranceFocusConsumer(self.settings, self.focus_monitor)
+
         self.settings_requested = False
         self.settings_window = None
-        self._focus_monitor_thread_id = None
 
         try:
             logger.info("Initializing monitor cache and setting brightness to 100%")
@@ -397,6 +386,18 @@ class QOLApp:
             self.settings.data["cs2_auto_accept_enabled"] = not self.settings.data.get("cs2_auto_accept_enabled", True)
             self.settings.save_settings()
 
+        def check_vibrance(_item):
+            return self.settings.data.get("vibrance_enabled", False)
+
+        def toggle_vibrance(_icon, _item):
+            self.settings.data["vibrance_enabled"] = not self.settings.data.get("vibrance_enabled", False)
+            self.settings.save_settings()
+            if not self.settings.data["vibrance_enabled"]:
+                vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
+                set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
+            else:
+                self.focus_monitor.reset()
+
         def toggle_auto_lock(_icon, _item):
             self.settings.data["auto_lock_enabled"] = not self.settings.data.get("auto_lock_enabled", True)
             self.settings.save_settings()
@@ -414,24 +415,16 @@ class QOLApp:
             version_action = self._refresh_updates
             version_label = f"{PROGRAM_NAME} v{VERSION} ↻"
 
+        lol_submenu = pystray.Menu(
+            pystray.MenuItem("Auto Accept", toggle_auto_accept, checked=check_auto_accept),
+            pystray.MenuItem("Auto Pick", toggle_auto_pick, checked=check_auto_pick),
+            pystray.MenuItem("Auto Lock", toggle_auto_lock, checked=check_auto_lock),
+        )
+
         menu_items = [
             pystray.MenuItem(version_label, version_action),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(
-                "LoL - Auto Accept",
-                toggle_auto_accept,
-                checked=check_auto_accept
-            ),
-            pystray.MenuItem(
-                "LoL - Auto Pick",
-                toggle_auto_pick,
-                checked=check_auto_pick
-            ),
-            pystray.MenuItem(
-                "LoL - Auto Lock",
-                toggle_auto_lock,
-                checked=check_auto_lock
-            ),
+            pystray.MenuItem("LoL", lol_submenu),
             pystray.MenuItem(
                 "CS2 - Auto Accept",
                 toggle_cs2_auto_accept,
@@ -441,6 +434,11 @@ class QOLApp:
                 "Dimming",
                 toggle_dimming,
                 checked=check_dimming
+            ),
+            pystray.MenuItem(
+                "Digital Vibrance",
+                toggle_vibrance,
+                checked=check_vibrance
             ),
             pystray.MenuItem("Auto Update", toggle_auto_update, checked=check_auto_update),
             pystray.MenuItem("Settings", self.show_settings),
@@ -465,12 +463,9 @@ class QOLApp:
                     pass
             self.lcu_connector.stop()
             self.cs2_watcher.stop()
-            # Stop the focus monitor thread by posting WM_QUIT to its message loop
-            if self._focus_monitor_thread_id:
-                WM_QUIT = 0x0012
-                ctypes.windll.user32.PostThreadMessageW(
-                    self._focus_monitor_thread_id, WM_QUIT, 0, 0
-                )
+            self.brightness_consumer.stop()
+            self.vibrance_consumer.stop()
+            self.focus_monitor.stop()
             self.icon.stop()
             if self.settings.data["dimming_enabled"]:
                 set_brightness_side_monitors(
@@ -484,7 +479,9 @@ class QOLApp:
     def run(self):
         self.lcu_connector.start()
         self.cs2_watcher.start()
-        Thread(target=self._focus_monitor_loop, daemon=True).start()
+        self.focus_monitor.start()
+        self.brightness_consumer.start()
+        self.vibrance_consumer.start()
         Thread(target=self._update_check_loop, daemon=True).start()
         Thread(target=self.icon.run, daemon=True).start()
         Thread(target=self._enable_dark_menus_when_ready, daemon=True).start()
@@ -511,88 +508,3 @@ class QOLApp:
                 return
             time.sleep(0.1)
         logger.debug("pystray HWNDs never appeared; skipping dark menu opt-in")
-
-    def _on_foreground_change(self, _win_event_hook_handle, _event_id: int,
-                                hwnd: wintypes.HWND, _id_object: wintypes.LONG,
-                                _id_child: wintypes.LONG, _event_thread_id: wintypes.DWORD,
-                                _event_time_ms: wintypes.DWORD):
-        """Callback for foreground window change events."""
-        try:
-            # Always get the actual foreground window, not the event's hwnd
-            # (EVENT_OBJECT_FOCUS can pass child controls, not top-level windows)
-            foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
-            if not foreground_hwnd:
-                return  # No foreground window - transient state
-            focused = get_window_title(foreground_hwnd)
-            # Skip transient windows (empty title, Alt+Tab switcher, etc.)
-            if not focused or focused in ('Task Switching', 'DesktopWindowXamlSource'):
-                return
-
-            if focused != self.last_focused_window:
-                self.last_focused_window = focused
-                logger.debug(f"Focus changed to: '{focused}'")
-
-                cleaned_focused = clean_window_title(focused)
-
-                if self.settings.data["dimming_enabled"]:
-                    games_list = self.settings.data['games_to_dimm']
-                    is_game_focused = cleaned_focused in games_list
-                    dim_all_mode = self.settings.data["dim_all_except_focused"]
-                    brightness_settings = self.settings.data["monitor_brightness"]
-
-                    if is_game_focused:
-                        monitors_to_dim = (get_all_monitor_serials_except_focused()
-                                           if dim_all_mode
-                                           else self.settings.data["dimmable_monitors"])
-                        logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
-                        set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
-                    else:
-                        logger.debug("Game unfocused - restoring all monitors")
-                        set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
-
-                if self.settings.data.get("vibrance_enabled", False):
-                    vibrance_games = self.settings.data.get("games_vibrance", [])
-                    is_vibrance_game = cleaned_focused in vibrance_games
-                    vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
-                    level = (self.settings.data.get("vibrance_game_level", 75)
-                             if is_vibrance_game
-                             else self.settings.data.get("vibrance_default_level", 50))
-                    logger.debug(f"Vibrance: {'game' if is_vibrance_game else 'default'} → {level}%")
-                    set_vibrance(level, vibrance_displays)
-        except Exception as e:
-            logger.error(f"Error in foreground change handler: {e}")
-
-    def _focus_monitor_loop(self):
-        """Run the Windows event hook message loop for focus monitoring."""
-        try:
-            self._focus_monitor_thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
-            with init_com():
-                self._foreground_hook = set_win_event_hook(
-                    self._on_foreground_change,
-                    HookEvent.SYSTEM_FOREGROUND
-                )
-                self._minimize_end_hook = set_win_event_hook(
-                    self._on_foreground_change,
-                    HookEvent.SYSTEM_MINIMIZEEND
-                )
-                self._object_focus_hook = set_win_event_hook(
-                    self._on_foreground_change,
-                    HookEvent.OBJECT_FOCUS
-                )
-                self._switch_end_hook = set_win_event_hook(
-                    self._on_foreground_change,
-                    HookEvent.SYSTEM_SWITCHEND
-                )
-                logger.debug("Focus monitor hooks registered")
-                _run_message_loop()
-        except Exception as e:
-            logger.error(f"Error in focus monitor loop: {e}")
-        finally:
-            if hasattr(self, '_foreground_hook') and self._foreground_hook:
-                self._foreground_hook.unhook()
-            if hasattr(self, '_minimize_end_hook') and self._minimize_end_hook:
-                self._minimize_end_hook.unhook()
-            if hasattr(self, '_object_focus_hook') and self._object_focus_hook:
-                self._object_focus_hook.unhook()
-            if hasattr(self, '_switch_end_hook') and self._switch_end_hook:
-                self._switch_end_hook.unhook()
