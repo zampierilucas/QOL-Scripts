@@ -30,6 +30,11 @@ class Settings:
         "cs2_auto_accept_enabled": True,
         "auto_update_enabled": False,
         "dim_all_except_focused": False,
+        "vibrance_enabled": False,
+        "vibrance_game_level": 75,
+        "vibrance_default_level": 50,
+        "games_vibrance": [],
+        "vibrance_displays": [],
         "default_champions": {
             "top": {"primary": None, "secondary": None},
             "jungle": {"primary": None, "secondary": None},
@@ -56,6 +61,11 @@ class Settings:
                 if "games_to_dimm" in self.data:
                     self.data["games_to_dimm"] = sorted(
                         [clean_window_title(g) for g in self.data["games_to_dimm"] if clean_window_title(g)],
+                        key=str.lower
+                    )
+                if "games_vibrance" in self.data:
+                    self.data["games_vibrance"] = sorted(
+                        [clean_window_title(g) for g in self.data["games_vibrance"] if clean_window_title(g)],
                         key=str.lower
                     )
                 # Migrate old champion format (single ID) to new format (primary/secondary)

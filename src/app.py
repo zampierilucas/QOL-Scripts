@@ -44,6 +44,7 @@ from brightness import (
     set_brightness_side_monitors, get_all_monitor_serials_except_focused,
     clean_window_title, init_monitors_cache, get_all_monitor_serials
 )
+from vibrance import init_nvapi, set_vibrance
 from lol import LoLAutoAccept, LoLAutoPick, SharedLCUConnector
 from cs2 import CS2AutoAccept, CS2ConsoleWatcher
 from settings_window import SettingsWindow
@@ -152,6 +153,11 @@ class QOLApp:
             set_brightness_side_monitors(100, get_all_monitor_serials())
         except Exception as e:
             logger.error(f"Failed to initialize monitors on startup: {e}")
+
+        try:
+            init_nvapi()
+        except Exception as e:
+            logger.error(f"Failed to initialize NVAPI: {e}")
 
     def signal_handler(self, _signum, _frame):
         logger.debug("Received signal to terminate. Cleaning up...")
@@ -471,6 +477,9 @@ class QOLApp:
                     self.settings.data["monitor_brightness"]["high"],
                     self.settings.data["dimmable_monitors"]
                 )
+            if self.settings.data.get("vibrance_enabled", False):
+                vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
+                set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
 
     def run(self):
         self.lcu_connector.start()
@@ -523,9 +532,10 @@ class QOLApp:
                 self.last_focused_window = focused
                 logger.debug(f"Focus changed to: '{focused}'")
 
+                cleaned_focused = clean_window_title(focused)
+
                 if self.settings.data["dimming_enabled"]:
                     games_list = self.settings.data['games_to_dimm']
-                    cleaned_focused = clean_window_title(focused)
                     is_game_focused = cleaned_focused in games_list
                     dim_all_mode = self.settings.data["dim_all_except_focused"]
                     brightness_settings = self.settings.data["monitor_brightness"]
@@ -539,6 +549,16 @@ class QOLApp:
                     else:
                         logger.debug("Game unfocused - restoring all monitors")
                         set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
+
+                if self.settings.data.get("vibrance_enabled", False):
+                    vibrance_games = self.settings.data.get("games_vibrance", [])
+                    is_vibrance_game = cleaned_focused in vibrance_games
+                    vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
+                    level = (self.settings.data.get("vibrance_game_level", 75)
+                             if is_vibrance_game
+                             else self.settings.data.get("vibrance_default_level", 50))
+                    logger.debug(f"Vibrance: {'game' if is_vibrance_game else 'default'} → {level}%")
+                    set_vibrance(level, vibrance_displays)
         except Exception as e:
             logger.error(f"Error in foreground change handler: {e}")
 

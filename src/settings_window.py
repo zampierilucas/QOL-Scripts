@@ -9,6 +9,7 @@ import pywinstyles
 
 from lol.lcu_api import LCUApi
 from brightness import clean_window_title, get_cached_monitors
+from vibrance import get_display_count
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +204,9 @@ class SettingsWindow:
         self.monitor_vars = {}
         self.games_list = sorted(self.settings.data["games_to_dimm"], key=str.lower)
 
+        self.vibrance_games_list = sorted(self.settings.data.get("games_vibrance", []), key=str.lower)
+        self.vibrance_display_vars = {}
+
         self.lcu_api = LCUApi()
         self.owned_champions = self.lcu_api.get_owned_champions() if self.lcu_api.is_connected() else {}
         self.champion_id_to_name = {v: k for k, v in self.owned_champions.items()}
@@ -309,6 +313,77 @@ class SettingsWindow:
         for idx in selected:
             del self.games_list[idx]
         self.refresh_games_listbox()
+
+    def refresh_vibrance_games_listbox(self):
+        self.vibrance_games_listbox.delete(0, tk.END)
+        for game in self.vibrance_games_list:
+            self.vibrance_games_listbox.insert(tk.END, game)
+
+    def remove_selected_vibrance_games(self):
+        selected = list(self.vibrance_games_listbox.curselection())
+        selected.reverse()
+        for idx in selected:
+            del self.vibrance_games_list[idx]
+        self.refresh_vibrance_games_listbox()
+
+    def show_add_vibrance_game_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Game (Vibrance)")
+        dialog.geometry("400x450")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        sv_ttk.set_theme(darkdetect.theme())
+        apply_theme_to_titlebar(dialog)
+
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 450) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = ttk.Frame(dialog, padding=15)
+        main_frame.pack(fill="both", expand=True)
+
+        ttk.Label(main_frame, text="Select from running programs:").pack(anchor="w")
+
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(fill="both", expand=True, pady=(5, 10))
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side="right", fill="y")
+
+        programs_list = tk.Listbox(list_frame, height=15, yscrollcommand=scrollbar.set, selectmode="extended")
+        programs_list.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=programs_list.yview)
+
+        for program in self.get_running_programs():
+            programs_list.insert(tk.END, program)
+
+        ttk.Separator(main_frame, orient="horizontal").pack(fill="x", pady=10)
+        ttk.Label(main_frame, text="Or enter manually:").pack(anchor="w")
+        manual_entry = ttk.Entry(main_frame)
+        manual_entry.pack(fill="x", pady=(5, 10))
+
+        def add_selected():
+            added = False
+            for idx in programs_list.curselection():
+                game = clean_window_title(programs_list.get(idx))
+                if game and game not in self.vibrance_games_list:
+                    self.vibrance_games_list.append(game)
+                    added = True
+            manual = clean_window_title(manual_entry.get())
+            if manual and manual not in self.vibrance_games_list:
+                self.vibrance_games_list.append(manual)
+                added = True
+            if added:
+                self.vibrance_games_list.sort(key=str.lower)
+                self.refresh_vibrance_games_listbox()
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x")
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=(5, 0))
+        ttk.Button(btn_frame, text="Add Selected", command=add_selected).pack(side="right")
+        programs_list.bind('<Double-Button-1>', lambda e: add_selected())
 
     def create_widgets(self):
         main_container = ttk.Frame(self.root)
@@ -424,6 +499,109 @@ class SettingsWindow:
             games_btn_frame,
             text="Remove",
             command=self.remove_selected_games,
+            width=12
+        ).pack(side="left", padx=(5, 0))
+
+        # Digital Vibrance section
+        vibrance_frame = ttk.LabelFrame(main_container, text="Digital Vibrance (NVIDIA)", padding=10)
+        vibrance_frame.pack(fill="x", pady=(0, 10))
+
+        self.vibrance_enabled_var = tk.BooleanVar(value=self.settings.data.get("vibrance_enabled", False))
+        ttk.Checkbutton(
+            vibrance_frame,
+            text="Enable digital vibrance",
+            variable=self.vibrance_enabled_var
+        ).pack(anchor="w", pady=(0, 5))
+
+        game_vib_row = ttk.Frame(vibrance_frame)
+        game_vib_row.pack(fill="x", pady=(0, 2))
+        ttk.Label(game_vib_row, text="Game vibrance:").pack(side="left")
+        self.vibrance_game_label = ttk.Label(game_vib_row, text="75%", width=5)
+        self.vibrance_game_label.pack(side="right")
+
+        self.vibrance_game_var = tk.IntVar(value=self.settings.data.get("vibrance_game_level", 75))
+        ttk.Scale(
+            vibrance_frame,
+            from_=0, to=100,
+            orient="horizontal",
+            variable=self.vibrance_game_var,
+            command=lambda v: self.vibrance_game_label.config(text=f"{int(float(v))}%")
+        ).pack(fill="x")
+        self.vibrance_game_label.config(text=f"{self.vibrance_game_var.get()}%")
+
+        default_vib_row = ttk.Frame(vibrance_frame)
+        default_vib_row.pack(fill="x", pady=(8, 2))
+        ttk.Label(default_vib_row, text="Default vibrance:").pack(side="left")
+        self.vibrance_default_label = ttk.Label(default_vib_row, text="50%", width=5)
+        self.vibrance_default_label.pack(side="right")
+
+        self.vibrance_default_var = tk.IntVar(value=self.settings.data.get("vibrance_default_level", 50))
+        ttk.Scale(
+            vibrance_frame,
+            from_=0, to=100,
+            orient="horizontal",
+            variable=self.vibrance_default_var,
+            command=lambda v: self.vibrance_default_label.config(text=f"{int(float(v))}%")
+        ).pack(fill="x")
+        self.vibrance_default_label.config(text=f"{self.vibrance_default_var.get()}%")
+
+        # Per-display checkboxes
+        try:
+            display_count = get_display_count()
+        except Exception:
+            display_count = 0
+
+        if display_count > 0:
+            ttk.Label(vibrance_frame, text="Apply to displays:").pack(anchor="w", pady=(8, 2))
+            saved_displays = self.settings.data.get("vibrance_displays", [])
+            for i in range(display_count):
+                var = tk.BooleanVar(value=i in saved_displays)
+                self.vibrance_display_vars[i] = var
+                ttk.Checkbutton(
+                    vibrance_frame,
+                    text=f"Display {i + 1}",
+                    variable=var
+                ).pack(anchor="w", pady=1)
+        else:
+            ttk.Label(
+                vibrance_frame,
+                text="No NVIDIA displays detected",
+                foreground="gray"
+            ).pack(anchor="w", pady=(8, 0))
+
+        # Vibrance games list
+        ttk.Label(vibrance_frame, text="Games (trigger vibrance):").pack(anchor="w", pady=(8, 2))
+
+        vib_list_container = ttk.Frame(vibrance_frame)
+        vib_list_container.pack(fill="x")
+
+        vib_scrollbar = ttk.Scrollbar(vib_list_container)
+        vib_scrollbar.pack(side="right", fill="y")
+
+        self.vibrance_games_listbox = tk.Listbox(
+            vib_list_container,
+            height=4,
+            selectmode="extended",
+            yscrollcommand=vib_scrollbar.set
+        )
+        self.vibrance_games_listbox.pack(side="left", fill="x", expand=True)
+        vib_scrollbar.config(command=self.vibrance_games_listbox.yview)
+
+        for game in self.vibrance_games_list:
+            self.vibrance_games_listbox.insert(tk.END, game)
+
+        vib_btn_frame = ttk.Frame(vibrance_frame)
+        vib_btn_frame.pack(fill="x", pady=(5, 0))
+        ttk.Button(
+            vib_btn_frame,
+            text="Add...",
+            command=self.show_add_vibrance_game_dialog,
+            width=12
+        ).pack(side="left")
+        ttk.Button(
+            vib_btn_frame,
+            text="Remove",
+            command=self.remove_selected_vibrance_games,
             width=12
         ).pack(side="left", padx=(5, 0))
 
@@ -544,6 +722,17 @@ class SettingsWindow:
 
             self.settings.data["dim_all_except_focused"] = self.dim_all_except_focused_var.get()
 
+            self.settings.data["vibrance_enabled"] = self.vibrance_enabled_var.get()
+            self.settings.data["vibrance_game_level"] = self.vibrance_game_var.get()
+            self.settings.data["vibrance_default_level"] = self.vibrance_default_var.get()
+            self.settings.data["vibrance_displays"] = [
+                i for i, var in self.vibrance_display_vars.items() if var.get()
+            ]
+            self.settings.data["games_vibrance"] = sorted(
+                [clean_window_title(g) for g in self.vibrance_games_list if clean_window_title(g)],
+                key=str.lower
+            )
+
             if self.champion_vars:
                 default_champions = {}
                 for role_key, vars_dict in self.champion_vars.items():
@@ -600,9 +789,15 @@ class SettingsWindow:
             role_vars.clear()
         self.champion_vars.clear()
 
+        # Neutralize vibrance display vars
+        for var in self.vibrance_display_vars.values():
+            neutralize_var(var)
+        self.vibrance_display_vars.clear()
+
         # Neutralize other vars
         for attr in ('high_brightness_var', 'low_brightness_var',
-                     'dim_all_except_focused_var', 'startup_var'):
+                     'dim_all_except_focused_var', 'startup_var',
+                     'vibrance_enabled_var', 'vibrance_game_var', 'vibrance_default_var'):
             var = getattr(self, attr, None)
             neutralize_var(var)
             setattr(self, attr, None)
