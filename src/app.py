@@ -108,6 +108,7 @@ class QOLApp:
         self.running = True
         self.install_dir = os.path.join(os.environ['LOCALAPPDATA'], 'Programs', PROGRAM_NAME)
         self.startup_shortcut = os.path.join(winshell.startup(), f"{PROGRAM_NAME}.lnk")
+        self.sync_startup_version()
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
 
@@ -168,6 +169,60 @@ class QOLApp:
         exe_name = os.path.basename(self.get_executable_path())
         return os.path.join(self.install_dir, exe_name)
 
+    def _installed_version_file(self):
+        return os.path.join(self.install_dir, "version.txt")
+
+    def _read_installed_version(self):
+        try:
+            with open(self._installed_version_file(), "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def _install_current_exe(self):
+        """Copy the running exe into install_dir and stamp version.txt."""
+        current_exe = self.get_executable_path()
+        installed_exe = self.get_installed_exe_path()
+        os.makedirs(self.install_dir, exist_ok=True)
+        shutil.copy2(current_exe, installed_exe)
+        with open(self._installed_version_file(), "w", encoding="utf-8") as f:
+            f.write(VERSION)
+        logger.info(f"Installed v{VERSION} to: {installed_exe}")
+        return installed_exe
+
+    def sync_startup_version(self):
+        """If a startup-installed copy exists and is older than the running
+        exe, replace it. Skipped when running unfrozen or when the running
+        exe IS the installed copy (can't overwrite self, and nothing to do)."""
+        if not getattr(sys, 'frozen', False):
+            return
+        installed_exe = self.get_installed_exe_path()
+        if not os.path.exists(installed_exe):
+            return
+        try:
+            if os.path.samefile(self.get_executable_path(), installed_exe):
+                return
+        except OSError:
+            pass
+
+        installed_ver = self._read_installed_version()
+        try:
+            needs_upgrade = (
+                installed_ver is None
+                or pkg_version.parse(VERSION) > pkg_version.parse(installed_ver)
+            )
+        except pkg_version.InvalidVersion:
+            needs_upgrade = True
+
+        if not needs_upgrade:
+            return
+
+        try:
+            self._install_current_exe()
+            logger.info(f"Startup copy upgraded {installed_ver} -> {VERSION}")
+        except OSError as e:
+            logger.error(f"Failed to upgrade startup copy: {e}")
+
     def toggle_startup(self, _icon, _item):
         """Toggle startup by installing app and managing shortcut"""
         try:
@@ -179,14 +234,9 @@ class QOLApp:
                     logger.warning("Startup installation is only available when running from the compiled .exe")
                     return
 
-                os.makedirs(self.install_dir, exist_ok=True)
-
-                current_exe = self.get_executable_path()
                 installed_exe = self.get_installed_exe_path()
-
-                if not os.path.exists(installed_exe) or os.path.getmtime(current_exe) > os.path.getmtime(installed_exe):
-                    shutil.copy2(current_exe, installed_exe)
-                    logger.info(f"Installed to: {installed_exe}")
+                if not os.path.exists(installed_exe):
+                    self._install_current_exe()
 
                 shell = Dispatch('WScript.Shell')
                 shortcut = shell.CreateShortCut(self.startup_shortcut)
