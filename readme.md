@@ -2,27 +2,32 @@
 
 ## Overview
 A Windows system tray application that provides quality-of-life automation for gaming:
-- League of Legends automation (auto accept, auto pick, auto lock)
-- CS2 automation (auto accept)
+- Auto-accept match queue pop-ups (League of Legends and CS2)
+- League of Legends champion auto-pick / auto-lock
 - Automatic monitor brightness adjustments when playing games
+- Automatic NVIDIA digital vibrance switching per game
 
 ## Features
 
+### Auto Accept
+- Automatically accepts match queue pop-ups for **League of Legends** (via the game's API) and **CS2** (by monitoring the console log)
+- CS2 requires `-condebug` in Steam launch options (automatically added if missing); a popup and tray indicator notify you if CS2 needs to be restarted to apply the flag
+
 ### League of Legends
-- **Auto Accept** - Automatically accepts match queue pop-ups via the game's API
 - **Auto Pick** - Automatically hovers your configured champion based on assigned role (supports primary and secondary picks per role)
 - **Auto Lock** - Automatically locks in your champion when the timer is below 5 seconds
-
-### CS2
-- **Auto Accept** - Automatically accepts match queue pop-ups by monitoring the CS2 console log
-  - Requires `-condebug` in CS2 Steam launch options (automatically added if missing)
-  - A popup notifies you if CS2 needs to be restarted to apply the flag; a tray indicator backs it up until the flag is active
 
 ### Monitor Dimming
 - Automatically dims secondary monitors when a configured game is in focus
 - Restores brightness when the game loses focus
 - Configurable brightness levels (high/low)
 - Option to dim all monitors except the focused one
+
+### Digital Vibrance (NVIDIA)
+- Automatically raises digital vibrance when a configured game is in focus and restores the default level when it loses focus
+- Configurable game vs. default levels, on the same scale as the NVIDIA Control Panel slider
+- Pick which displays the change applies to
+- Requires an NVIDIA GPU
 
 ### General
 - **System Tray** - Runs quietly in the background with easy access via tray icon
@@ -57,7 +62,8 @@ A Windows system tray application that provides quality-of-life automation for g
    - Toggle **LoL - Auto Lock** on/off
    - Toggle **CS2 - Auto Accept** on/off
    - Toggle **Dimming** on/off
-   - Open **Settings** to configure monitors, games, brightness levels, and default champions
+   - Toggle **Digital Vibrance** on/off
+   - Open **Settings** to configure monitors, games, brightness levels, vibrance levels/displays, and default champions
    - View **About** for repository link
    - **Exit** the application
 3. When an update is available, an "Update available" button appears in the menu
