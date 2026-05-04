@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 # NVAPI function IDs
 _NVAPI_INITIALIZE = 0x0150E828
 _NVAPI_ENUM_DISPLAY_HANDLE = 0x9ABDD40D
-_NVAPI_GET_DVC_INFO = 0x4085DE45
-_NVAPI_SET_DVC_LEVEL = 0x172409B4
+_NVAPI_GET_DVC_INFO_EX = 0x0E45002D
+_NVAPI_SET_DVC_LEVEL_EX = 0x4A82C2B1
 _NVAPI_GET_ASSOC_DISPLAY_NAME = 0x22A78B05
 
 _MAX_DISPLAYS = 16
@@ -19,12 +19,19 @@ _display_handles: list = []
 _initialized = False
 
 
-class _NvDVCInfo(ctypes.Structure):
+class _NvDVCInfoEx(ctypes.Structure):
+    """Extended DVC info — exposes ``defaultLevel`` (the driver's "no
+    enhancement" baseline) and uses the same scale as NVIDIA Control Panel:
+    0 = grayscale, default (typically 50) = no enhancement, max (typically
+    100) = max enhancement. The legacy ``NvAPI_GetDVCInfo`` reports a
+    different, compressed range that doesn't line up with NCP's slider, so
+    we use the Ex variant exclusively."""
     _fields_ = [
         ("version",       ctypes.c_uint32),
         ("currentLevel",  ctypes.c_int32),
         ("minLevel",      ctypes.c_int32),
         ("maxLevel",      ctypes.c_int32),
+        ("defaultLevel",  ctypes.c_int32),
     ]
 
 
@@ -126,32 +133,38 @@ def get_displays() -> list[tuple[int, str]]:
 
 
 def _get_dvc_info(display_index: int):
-    """Return (currentLevel, minLevel, maxLevel) or None."""
+    """Return (currentLevel, minLevel, maxLevel, defaultLevel) on the
+    NCP-aligned scale (0 = grayscale, default = no enhancement, max = max
+    enhancement), or ``None`` on failure."""
     if display_index >= len(_display_handles):
         return None
     get_fn = _query(
-        _NVAPI_GET_DVC_INFO,
+        _NVAPI_GET_DVC_INFO_EX,
         ctypes.c_int32,
         ctypes.c_void_p,
         ctypes.c_uint32,
-        ctypes.POINTER(_NvDVCInfo),
+        ctypes.POINTER(_NvDVCInfoEx),
     )
     if not get_fn:
         return None
 
-    info = _NvDVCInfo()
-    info.version = ctypes.sizeof(_NvDVCInfo) | (1 << 16)
+    info = _NvDVCInfoEx()
+    info.version = ctypes.sizeof(_NvDVCInfoEx) | (1 << 16)
     if get_fn(_display_handles[display_index], 0, ctypes.byref(info)) != 0:
         return None
-    return info.currentLevel, info.minLevel, info.maxLevel
+    return info.currentLevel, info.minLevel, info.maxLevel, info.defaultLevel
 
 
 def set_vibrance(level_percent: int, display_indices: list | None = None) -> bool:
     """
     Set digital vibrance for the given display indices.
 
-    level_percent: 0-100.  50 = driver default (maps to 0 in the ±1024 range).
-    display_indices: list of NVAPI display indices (0-based).  None = all displays.
+    Uses ``NvAPI_SetDVCLevelEx`` so the percentage is on the same scale NVIDIA
+    Control Panel shows: 0% = grayscale, 50% = driver default (no
+    enhancement), 100% = max enhancement.
+
+    level_percent: 0-100.
+    display_indices: list of NVAPI display indices (0-based). None = all displays.
     """
     if not _initialized and not init_nvapi():
         return False
@@ -160,11 +173,11 @@ def set_vibrance(level_percent: int, display_indices: list | None = None) -> boo
         display_indices = list(range(len(_display_handles)))
 
     set_fn = _query(
-        _NVAPI_SET_DVC_LEVEL,
+        _NVAPI_SET_DVC_LEVEL_EX,
         ctypes.c_int32,
         ctypes.c_void_p,
         ctypes.c_uint32,
-        ctypes.c_int32,
+        ctypes.POINTER(_NvDVCInfoEx),
     )
     if not set_fn:
         return False
@@ -175,14 +188,20 @@ def set_vibrance(level_percent: int, display_indices: list | None = None) -> boo
         if dvc is None:
             ok = False
             continue
-        _, min_lvl, max_lvl = dvc
+        _, min_lvl, max_lvl, default_lvl = dvc
         target = int(min_lvl + (max_lvl - min_lvl) * level_percent / 100)
-        status = set_fn(_display_handles[idx], 0, target)
+        write = _NvDVCInfoEx()
+        write.version = ctypes.sizeof(_NvDVCInfoEx) | (1 << 16)
+        write.currentLevel = target
+        write.minLevel = min_lvl
+        write.maxLevel = max_lvl
+        write.defaultLevel = default_lvl
+        status = set_fn(_display_handles[idx], 0, ctypes.byref(write))
         if status != 0:
-            logger.error(f"NvAPI_SetDVCLevel failed for display {idx}: {status}")
+            logger.error(f"NvAPI_SetDVCLevelEx failed for display {idx}: {status}")
             ok = False
         else:
-            logger.debug(f"Display {idx}: DVC → {target} ({level_percent}%)")
+            logger.debug(f"Display {idx}: DVC -> {target} ({level_percent}%)")
     return ok
 
 
@@ -227,5 +246,5 @@ class VibranceFocusConsumer:
         level = (self.settings.data.get("vibrance_game_level", 75)
                  if is_vibrance_game
                  else self.settings.data.get("vibrance_default_level", 50))
-        logger.debug(f"Vibrance: {'game' if is_vibrance_game else 'default'} → {level}%")
+        logger.debug(f"Vibrance: {'game' if is_vibrance_game else 'default'} -> {level}%")
         set_vibrance(level, vibrance_displays)
