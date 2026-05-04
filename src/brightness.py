@@ -1,6 +1,7 @@
 import re
 import logging
 import screen_brightness_control as sbc
+from threading import Thread
 from win32gui import GetForegroundWindow
 from win32api import GetMonitorInfo, MonitorFromWindow
 from win32con import MONITOR_DEFAULTTONEAREST
@@ -139,3 +140,57 @@ def get_all_monitor_serials_except_focused():
     except Exception as e:
         logger.error(f"Error getting non-focused monitors: {e}")
         return []
+
+
+class BrightnessFocusConsumer:
+    """Daemon thread that subscribes to a FocusMonitor and dims/restores
+    monitors when a tracked game gains/loses focus.
+
+    Owns its own thread so its (potentially slow) sbc calls don't delay
+    other focus consumers."""
+
+    def __init__(self, settings, focus_monitor):
+        self.settings = settings
+        self.focus_monitor = focus_monitor
+        self._thread = None
+        self._running = False
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = Thread(target=self._run, daemon=True, name="brightness-focus")
+        self._thread.start()
+
+    def stop(self):
+        # FocusMonitor.stop() will notify_all and our wait() returns None.
+        self._running = False
+
+    def _run(self):
+        sub = self.focus_monitor.subscribe()
+        while self._running:
+            title = sub.wait()
+            if title is None:
+                return  # monitor stopped
+            try:
+                self._apply(title)
+            except Exception as e:
+                logger.error(f"Brightness consumer error: {e}")
+
+    def _apply(self, focused_title: str):
+        if not self.settings.data["dimming_enabled"]:
+            return
+        games_list = self.settings.data['games_to_dimm']
+        is_game_focused = focused_title in games_list
+        dim_all_mode = self.settings.data["dim_all_except_focused"]
+        brightness_settings = self.settings.data["monitor_brightness"]
+
+        if is_game_focused:
+            monitors_to_dim = (get_all_monitor_serials_except_focused()
+                               if dim_all_mode
+                               else self.settings.data["dimmable_monitors"])
+            logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
+            set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
+        else:
+            logger.debug("Game unfocused - restoring all monitors")
+            set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())

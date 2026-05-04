@@ -1,3 +1,4 @@
+import re
 import sys
 import logging
 import tkinter as tk
@@ -6,9 +7,11 @@ import win32gui
 import sv_ttk
 import darkdetect
 import pywinstyles
+from PIL import ImageTk
 
 from lol.lcu_api import LCUApi
 from brightness import clean_window_title, get_cached_monitors
+from vibrance import get_displays
 
 logger = logging.getLogger(__name__)
 
@@ -196,12 +199,23 @@ class SettingsWindow:
         self.app = app
         self.root = tk.Tk()
         self.root.title("QOL Settings")
-        self.root.geometry("420x1000")
-        self.root.minsize(380, 1000)
-        self.root.maxsize(600, 1000)
+        self.root.geometry("880x600")  # provisional; resized to content below
+        # Reuse the tray PIL image so the title bar / taskbar show the QOL icon
+        # instead of Tk's default. Keep a reference on self to prevent the
+        # PhotoImage from being garbage collected (otherwise it goes blank).
+        icon_image = getattr(app, '_icon_image', None) if app else None
+        if icon_image is not None:
+            try:
+                self._icon_photo = ImageTk.PhotoImage(icon_image, master=self.root)
+                self.root.iconphoto(True, self._icon_photo)
+            except Exception as e:
+                logger.debug(f"Could not set settings window icon: {e}")
         sv_ttk.set_theme(darkdetect.theme())
         self.monitor_vars = {}
         self.games_list = sorted(self.settings.data["games_to_dimm"], key=str.lower)
+
+        self.vibrance_games_list = sorted(self.settings.data.get("games_vibrance", []), key=str.lower)
+        self.vibrance_display_vars = {}
 
         self.lcu_api = LCUApi()
         self.owned_champions = self.lcu_api.get_owned_champions() if self.lcu_api.is_connected() else {}
@@ -209,6 +223,12 @@ class SettingsWindow:
         self.champion_vars = {}
 
         self.create_widgets()
+        # Resize to natural content height so the window ends just under the
+        # tallest column instead of hard-coding a value.
+        self.root.update_idletasks()
+        content_height = self.root.winfo_reqheight()
+        self.root.geometry(f"880x{content_height}")
+        self.root.minsize(820, content_height)
         apply_theme_to_titlebar(self.root)
         # Bind cleanup to window close to avoid tkinter threading issues
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -310,110 +330,180 @@ class SettingsWindow:
             del self.games_list[idx]
         self.refresh_games_listbox()
 
+    def refresh_vibrance_games_listbox(self):
+        self.vibrance_games_listbox.delete(0, tk.END)
+        for game in self.vibrance_games_list:
+            self.vibrance_games_listbox.insert(tk.END, game)
+
+    def remove_selected_vibrance_games(self):
+        selected = list(self.vibrance_games_listbox.curselection())
+        selected.reverse()
+        for idx in selected:
+            del self.vibrance_games_list[idx]
+        self.refresh_vibrance_games_listbox()
+
+    def show_add_vibrance_game_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Game (Vibrance)")
+        dialog.geometry("400x450")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        sv_ttk.set_theme(darkdetect.theme())
+        apply_theme_to_titlebar(dialog)
+
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 450) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = ttk.Frame(dialog, padding=15)
+        main_frame.pack(fill="both", expand=True)
+
+        ttk.Label(main_frame, text="Select from running programs:").pack(anchor="w")
+
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(fill="both", expand=True, pady=(5, 10))
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side="right", fill="y")
+
+        programs_list = tk.Listbox(list_frame, height=15, yscrollcommand=scrollbar.set, selectmode="extended")
+        programs_list.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=programs_list.yview)
+
+        for program in self.get_running_programs():
+            programs_list.insert(tk.END, program)
+
+        ttk.Separator(main_frame, orient="horizontal").pack(fill="x", pady=10)
+        ttk.Label(main_frame, text="Or enter manually:").pack(anchor="w")
+        manual_entry = ttk.Entry(main_frame)
+        manual_entry.pack(fill="x", pady=(5, 10))
+
+        def add_selected():
+            added = False
+            for idx in programs_list.curselection():
+                game = clean_window_title(programs_list.get(idx))
+                if game and game not in self.vibrance_games_list:
+                    self.vibrance_games_list.append(game)
+                    added = True
+            manual = clean_window_title(manual_entry.get())
+            if manual and manual not in self.vibrance_games_list:
+                self.vibrance_games_list.append(manual)
+                added = True
+            if added:
+                self.vibrance_games_list.sort(key=str.lower)
+                self.refresh_vibrance_games_listbox()
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x")
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=(5, 0))
+        ttk.Button(btn_frame, text="Add Selected", command=add_selected).pack(side="right")
+        programs_list.bind('<Double-Button-1>', lambda e: add_selected())
+
     def create_widgets(self):
         main_container = ttk.Frame(self.root)
         main_container.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # Monitors Frame
-        monitors_frame = ttk.LabelFrame(main_container, text="Dimmable Monitors", padding=10)
-        monitors_frame.pack(fill="x", pady=(0, 10))
+        # Two-column body
+        columns = ttk.Frame(main_container)
+        columns.pack(fill="both", expand=True)
 
+        left_col = ttk.Frame(columns)
+        left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        right_col = ttk.Frame(columns)
+        right_col.pack(side="left", fill="both", expand=True, padx=(8, 0))
+
+        # Dimming section (mirrors the Digital Vibrance layout below)
+        dimming_frame = ttk.LabelFrame(left_col, text="Dimming", padding=10)
+        dimming_frame.pack(fill="x", pady=(0, 10))
+
+        self.dimming_enabled_var = tk.BooleanVar(value=self.settings.data.get("dimming_enabled", True))
+        ttk.Checkbutton(
+            dimming_frame,
+            text="Enable dimming",
+            variable=self.dimming_enabled_var
+        ).pack(anchor="w", pady=(0, 5))
+
+        high_row = ttk.Frame(dimming_frame)
+        high_row.pack(fill="x", pady=(0, 2))
+        ttk.Label(high_row, text="Focused:").pack(side="left")
+        self.high_value_label = ttk.Label(high_row, text="100%", width=5)
+        self.high_value_label.pack(side="right")
+
+        self.high_brightness_var = tk.IntVar(value=self.settings.data["monitor_brightness"]["high"])
+        ttk.Scale(
+            dimming_frame,
+            from_=0, to=100,
+            orient="horizontal",
+            variable=self.high_brightness_var,
+            command=lambda v: self.high_value_label.config(text=f"{int(float(v))}%")
+        ).pack(fill="x")
+        self.high_value_label.config(text=f"{self.high_brightness_var.get()}%")
+
+        low_row = ttk.Frame(dimming_frame)
+        low_row.pack(fill="x", pady=(8, 2))
+        ttk.Label(low_row, text="Dimmed:").pack(side="left")
+        self.low_value_label = ttk.Label(low_row, text="10%", width=5)
+        self.low_value_label.pack(side="right")
+
+        self.low_brightness_var = tk.IntVar(value=self.settings.data["monitor_brightness"]["low"])
+        ttk.Scale(
+            dimming_frame,
+            from_=0, to=100,
+            orient="horizontal",
+            variable=self.low_brightness_var,
+            command=lambda v: self.low_value_label.config(text=f"{int(float(v))}%")
+        ).pack(fill="x")
+        self.low_value_label.config(text=f"{self.low_brightness_var.get()}%")
+
+        ttk.Label(dimming_frame, text="Apply to displays:").pack(anchor="w", pady=(8, 2))
         try:
             monitors_info = get_cached_monitors()
             logger.debug(f"Found {len(monitors_info)} monitors")
-
             for index, info in enumerate(monitors_info):
                 serial = info.get('serial', 'Unknown')
                 name = info.get('name', 'Unknown')
-                display_name = f"Monitor {index + 1}: {name}"
-
+                display_name = f"{index + 1}: {name}"
                 logger.debug(f"Adding monitor: {display_name}")
-
-                var = tk.BooleanVar()
-                var.set(serial in self.settings.data["dimmable_monitors"])
+                var = tk.BooleanVar(value=serial in self.settings.data["dimmable_monitors"])
                 self.monitor_vars[serial] = var
-
                 ttk.Checkbutton(
-                    monitors_frame,
+                    dimming_frame,
                     text=display_name,
                     variable=var
-                ).pack(anchor="w", pady=2)
-
+                ).pack(anchor="w", pady=1)
         except Exception as e:
             logger.error(f"Error setting up monitor checkboxes: {e}")
             ttk.Label(
-                monitors_frame,
+                dimming_frame,
                 text=f"Error loading monitors: {str(e)}",
                 foreground="red"
             ).pack(fill="x", pady=5)
 
-        # Brightness Frame
-        brightness_frame = ttk.LabelFrame(main_container, text="Brightness Settings", padding=10)
-        brightness_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(dimming_frame, text="Games (trigger dimming):").pack(anchor="w", pady=(8, 2))
 
-        high_frame = ttk.Frame(brightness_frame)
-        high_frame.pack(fill="x", pady=(0, 5))
-        ttk.Label(high_frame, text="Focused:").pack(side="left")
-        self.high_value_label = ttk.Label(high_frame, text="100%", width=5)
-        self.high_value_label.pack(side="right")
+        games_list_container = ttk.Frame(dimming_frame)
+        games_list_container.pack(fill="x")
 
-        self.high_brightness_var = tk.IntVar(value=self.settings.data["monitor_brightness"]["high"])
-        self.high_brightness = ttk.Scale(
-            brightness_frame,
-            from_=0,
-            to=100,
-            orient="horizontal",
-            variable=self.high_brightness_var,
-            command=lambda v: self.high_value_label.config(text=f"{int(float(v))}%")
+        games_scrollbar = ttk.Scrollbar(games_list_container)
+        games_scrollbar.pack(side="right", fill="y")
+
+        self.games_listbox = tk.Listbox(
+            games_list_container,
+            height=4,
+            selectmode="extended",
+            yscrollcommand=games_scrollbar.set,
         )
-        self.high_brightness.pack(fill="x")
-        self.high_value_label.config(text=f"{self.high_brightness_var.get()}%")
-
-        low_frame = ttk.Frame(brightness_frame)
-        low_frame.pack(fill="x", pady=(10, 5))
-        ttk.Label(low_frame, text="Dimmed:").pack(side="left")
-        self.low_value_label = ttk.Label(low_frame, text="10%", width=5)
-        self.low_value_label.pack(side="right")
-
-        self.low_brightness_var = tk.IntVar(value=self.settings.data["monitor_brightness"]["low"])
-        self.low_brightness = ttk.Scale(
-            brightness_frame,
-            from_=0,
-            to=100,
-            orient="horizontal",
-            variable=self.low_brightness_var,
-            command=lambda v: self.low_value_label.config(text=f"{int(float(v))}%")
-        )
-        self.low_brightness.pack(fill="x")
-        self.low_value_label.config(text=f"{self.low_brightness_var.get()}%")
-
-        self.dim_all_except_focused_var = tk.BooleanVar()
-        self.dim_all_except_focused_var.set(self.settings.data.get("dim_all_except_focused", False))
-        ttk.Checkbutton(
-            brightness_frame,
-            text="Dim all monitors except focused (experimental)",
-            variable=self.dim_all_except_focused_var
-        ).pack(anchor="w", pady=(10, 0))
-
-        # Games section
-        games_frame = ttk.LabelFrame(main_container, text="Games to Dim", padding=10)
-        games_frame.pack(fill="both", expand=True, pady=(0, 10))
-
-        list_container = ttk.Frame(games_frame)
-        list_container.pack(fill="both", expand=True)
-
-        scrollbar = ttk.Scrollbar(list_container)
-        scrollbar.pack(side="right", fill="y")
-
-        self.games_listbox = tk.Listbox(list_container, height=6, selectmode="extended", yscrollcommand=scrollbar.set)
-        self.games_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=self.games_listbox.yview)
+        self.games_listbox.pack(side="left", fill="x", expand=True)
+        games_scrollbar.config(command=self.games_listbox.yview)
 
         for game in self.games_list:
             self.games_listbox.insert(tk.END, game)
 
-        games_btn_frame = ttk.Frame(games_frame)
-        games_btn_frame.pack(fill="x", pady=(10, 0))
+        games_btn_frame = ttk.Frame(dimming_frame)
+        games_btn_frame.pack(fill="x", pady=(5, 0))
         ttk.Button(
             games_btn_frame,
             text="Add...",
@@ -427,8 +517,128 @@ class SettingsWindow:
             width=12
         ).pack(side="left", padx=(5, 0))
 
+        self.dim_all_except_focused_var = tk.BooleanVar(
+            value=self.settings.data.get("dim_all_except_focused", False)
+        )
+        ttk.Checkbutton(
+            dimming_frame,
+            text="Dim all monitors except focused (experimental)",
+            variable=self.dim_all_except_focused_var
+        ).pack(anchor="w", pady=(10, 0))
+
+        # Digital Vibrance section
+        vibrance_frame = ttk.LabelFrame(right_col, text="Digital Vibrance (NVIDIA)", padding=10)
+        vibrance_frame.pack(fill="x", pady=(0, 10))
+
+        self.vibrance_enabled_var = tk.BooleanVar(value=self.settings.data.get("vibrance_enabled", False))
+        ttk.Checkbutton(
+            vibrance_frame,
+            text="Enable digital vibrance",
+            variable=self.vibrance_enabled_var
+        ).pack(anchor="w", pady=(0, 5))
+
+        game_vib_row = ttk.Frame(vibrance_frame)
+        game_vib_row.pack(fill="x", pady=(0, 2))
+        ttk.Label(game_vib_row, text="Game vibrance:").pack(side="left")
+        self.vibrance_game_label = ttk.Label(game_vib_row, text="75%", width=5)
+        self.vibrance_game_label.pack(side="right")
+
+        self.vibrance_game_var = tk.IntVar(value=self.settings.data.get("vibrance_game_level", 75))
+        ttk.Scale(
+            vibrance_frame,
+            from_=0, to=100,
+            orient="horizontal",
+            variable=self.vibrance_game_var,
+            command=lambda v: self.vibrance_game_label.config(text=f"{int(float(v))}%")
+        ).pack(fill="x")
+        self.vibrance_game_label.config(text=f"{self.vibrance_game_var.get()}%")
+
+        default_vib_row = ttk.Frame(vibrance_frame)
+        default_vib_row.pack(fill="x", pady=(8, 2))
+        ttk.Label(default_vib_row, text="Default vibrance:").pack(side="left")
+        self.vibrance_default_label = ttk.Label(default_vib_row, text="50%", width=5)
+        self.vibrance_default_label.pack(side="right")
+
+        self.vibrance_default_var = tk.IntVar(value=self.settings.data.get("vibrance_default_level", 50))
+        ttk.Scale(
+            vibrance_frame,
+            from_=0, to=100,
+            orient="horizontal",
+            variable=self.vibrance_default_var,
+            command=lambda v: self.vibrance_default_label.config(text=f"{int(float(v))}%")
+        ).pack(fill="x")
+        self.vibrance_default_label.config(text=f"{self.vibrance_default_var.get()}%")
+
+        # Per-display checkboxes
+        try:
+            nv_displays = get_displays()
+        except Exception:
+            nv_displays = []
+
+        if nv_displays:
+            ttk.Label(vibrance_frame, text="Apply to displays:").pack(anchor="w", pady=(8, 2))
+            saved_displays = self.settings.data.get("vibrance_displays", [])
+            monitors_info = get_cached_monitors()
+            for nv_idx, gdi_name in nv_displays:
+                friendly = None
+                m = re.search(r'DISPLAY(\d+)', gdi_name or "")
+                if m:
+                    sbc_idx = int(m.group(1)) - 1
+                    if 0 <= sbc_idx < len(monitors_info):
+                        friendly = monitors_info[sbc_idx].get('name')
+                label = f"{nv_idx + 1}: {friendly}" if friendly else f"{nv_idx + 1}"
+                var = tk.BooleanVar(value=nv_idx in saved_displays)
+                self.vibrance_display_vars[nv_idx] = var
+                ttk.Checkbutton(
+                    vibrance_frame,
+                    text=label,
+                    variable=var
+                ).pack(anchor="w", pady=1)
+        else:
+            ttk.Label(
+                vibrance_frame,
+                text="No NVIDIA displays detected",
+                foreground="gray"
+            ).pack(anchor="w", pady=(8, 0))
+
+        # Vibrance games list
+        ttk.Label(vibrance_frame, text="Games (trigger vibrance):").pack(anchor="w", pady=(8, 2))
+
+        vib_list_container = ttk.Frame(vibrance_frame)
+        vib_list_container.pack(fill="x")
+
+        vib_scrollbar = ttk.Scrollbar(vib_list_container)
+        vib_scrollbar.pack(side="right", fill="y")
+
+        self.vibrance_games_listbox = tk.Listbox(
+            vib_list_container,
+            height=4,
+            selectmode="extended",
+            yscrollcommand=vib_scrollbar.set
+        )
+        self.vibrance_games_listbox.pack(side="left", fill="x", expand=True)
+        vib_scrollbar.config(command=self.vibrance_games_listbox.yview)
+
+        for game in self.vibrance_games_list:
+            self.vibrance_games_listbox.insert(tk.END, game)
+
+        vib_btn_frame = ttk.Frame(vibrance_frame)
+        vib_btn_frame.pack(fill="x", pady=(5, 0))
+        ttk.Button(
+            vib_btn_frame,
+            text="Add...",
+            command=self.show_add_vibrance_game_dialog,
+            width=12
+        ).pack(side="left")
+        ttk.Button(
+            vib_btn_frame,
+            text="Remove",
+            command=self.remove_selected_vibrance_games,
+            width=12
+        ).pack(side="left", padx=(5, 0))
+
         # Champion selection section
-        champs_frame = ttk.LabelFrame(main_container, text="Default Champions per Role", padding=10)
+        champs_frame = ttk.LabelFrame(right_col, text="Default Champions per Role", padding=10)
         champs_frame.pack(fill="x", pady=(0, 10))
 
         if self.owned_champions:
@@ -493,7 +703,7 @@ class SettingsWindow:
             ).pack(anchor="w")
 
         # General section
-        general_frame = ttk.LabelFrame(main_container, text="General", padding=10)
+        general_frame = ttk.LabelFrame(left_col, text="General", padding=10)
         general_frame.pack(fill="x", pady=(0, 10))
 
         self.startup_var = tk.BooleanVar()
@@ -543,6 +753,18 @@ class SettingsWindow:
             logger.debug(f"Saved games_to_dimm: {self.settings.data['games_to_dimm']}")
 
             self.settings.data["dim_all_except_focused"] = self.dim_all_except_focused_var.get()
+            self.settings.data["dimming_enabled"] = self.dimming_enabled_var.get()
+
+            self.settings.data["vibrance_enabled"] = self.vibrance_enabled_var.get()
+            self.settings.data["vibrance_game_level"] = self.vibrance_game_var.get()
+            self.settings.data["vibrance_default_level"] = self.vibrance_default_var.get()
+            self.settings.data["vibrance_displays"] = [
+                i for i, var in self.vibrance_display_vars.items() if var.get()
+            ]
+            self.settings.data["games_vibrance"] = sorted(
+                [clean_window_title(g) for g in self.vibrance_games_list if clean_window_title(g)],
+                key=str.lower
+            )
 
             if self.champion_vars:
                 default_champions = {}
@@ -572,7 +794,7 @@ class SettingsWindow:
 
             self.settings.save_settings()
             if self.app:
-                self.app.last_focused_window = None
+                self.app.focus_monitor.reset()
             self._on_close()
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
@@ -600,9 +822,16 @@ class SettingsWindow:
             role_vars.clear()
         self.champion_vars.clear()
 
+        # Neutralize vibrance display vars
+        for var in self.vibrance_display_vars.values():
+            neutralize_var(var)
+        self.vibrance_display_vars.clear()
+
         # Neutralize other vars
         for attr in ('high_brightness_var', 'low_brightness_var',
-                     'dim_all_except_focused_var', 'startup_var'):
+                     'dim_all_except_focused_var', 'dimming_enabled_var',
+                     'startup_var',
+                     'vibrance_enabled_var', 'vibrance_game_var', 'vibrance_default_var'):
             var = getattr(self, attr, None)
             neutralize_var(var)
             setattr(self, attr, None)
