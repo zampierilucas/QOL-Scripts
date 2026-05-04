@@ -101,10 +101,14 @@ jobs:
   release-version:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           name: qol_scripts
@@ -113,10 +117,35 @@ jobs:
         shell: bash
         run: mv "./QOL-scripts.exe" "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
 
+      - name: Build changelog from git log
+        id: changelog
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="${GITHUB_REF_NAME}"
+            HEADER="## Changes"
+          else
+            RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
+            HEADER="## Changes since ${PREV_TAG}"
+          fi
+          {
+            echo "body<<EOF"
+            echo "$HEADER"
+            echo
+            git log --no-merges --pretty=format:'- %s' "$RANGE"
+            echo
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${GITHUB_REF_NAME}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Versioned Release
         uses: softprops/action-gh-release@v1
         with:
           name: "Release ${{ github.ref_name }}"
           files: "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.body }}
