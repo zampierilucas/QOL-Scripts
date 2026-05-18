@@ -702,6 +702,39 @@ class SettingsWindow:
                 foreground="gray"
             ).pack(anchor="w")
 
+        # CS2 section
+        cs2_frame = ttk.LabelFrame(left_col, text="CS2", padding=10)
+        cs2_frame.pack(fill="x", pady=(0, 10))
+
+        self.cs2_resolution_var = tk.BooleanVar(
+            value=self.settings.data.get("cs2_resolution_enabled", False)
+        )
+        ttk.Checkbutton(
+            cs2_frame,
+            text="Switch resolution when CS2 launches",
+            variable=self.cs2_resolution_var
+        ).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(
+            cs2_frame,
+            text="Resolution is read from CS2's video config automatically.",
+            foreground="gray"
+        ).pack(anchor="w", pady=(0, 6))
+
+        res_row = ttk.Frame(cs2_frame)
+        res_row.pack(fill="x")
+        ttk.Label(res_row, text="Fallback resolution:").pack(side="left")
+        self.cs2_res_width_var = tk.StringVar(
+            value=str(self.settings.data.get("cs2_resolution_width", 1280))
+        )
+        self.cs2_res_height_var = tk.StringVar(
+            value=str(self.settings.data.get("cs2_resolution_height", 960))
+        )
+        ttk.Entry(res_row, textvariable=self.cs2_res_width_var, width=6).pack(side="left", padx=(8, 2))
+        ttk.Label(res_row, text="×").pack(side="left")
+        ttk.Entry(res_row, textvariable=self.cs2_res_height_var, width=6).pack(side="left", padx=(2, 0))
+        ttk.Label(res_row, text="px", foreground="gray").pack(side="left", padx=(4, 0))
+
         # General section
         general_frame = ttk.LabelFrame(left_col, text="General", padding=10)
         general_frame.pack(fill="x", pady=(0, 10))
@@ -765,6 +798,16 @@ class SettingsWindow:
                 [clean_window_title(g) for g in self.vibrance_games_list if clean_window_title(g)],
                 key=str.lower
             )
+
+            self.settings.data["cs2_resolution_enabled"] = self.cs2_resolution_var.get()
+            try:
+                self.settings.data["cs2_resolution_width"] = int(self.cs2_res_width_var.get())
+            except ValueError:
+                self.settings.data["cs2_resolution_width"] = 1280
+            try:
+                self.settings.data["cs2_resolution_height"] = int(self.cs2_res_height_var.get())
+            except ValueError:
+                self.settings.data["cs2_resolution_height"] = 960
 
             if self.champion_vars:
                 default_champions = {}
@@ -831,7 +874,8 @@ class SettingsWindow:
         for attr in ('high_brightness_var', 'low_brightness_var',
                      'dim_all_except_focused_var', 'dimming_enabled_var',
                      'startup_var',
-                     'vibrance_enabled_var', 'vibrance_game_var', 'vibrance_default_var'):
+                     'vibrance_enabled_var', 'vibrance_game_var', 'vibrance_default_var',
+                     'cs2_resolution_var', 'cs2_res_width_var', 'cs2_res_height_var'):
             var = getattr(self, attr, None)
             neutralize_var(var)
             setattr(self, attr, None)

@@ -31,6 +31,7 @@ from vibrance import init_nvapi, set_vibrance, VibranceFocusConsumer
 from focus_monitor import FocusMonitor
 from lol import LoLAutoAccept, LoLAutoPick, SharedLCUConnector
 from cs2 import CS2AutoAccept, CS2ConsoleWatcher
+from resolution import CS2ResolutionSwitcher
 from settings_window import SettingsWindow
 
 try:
@@ -126,6 +127,8 @@ class QOLApp:
         self.cs2_watcher = CS2ConsoleWatcher()
         self.cs2_watcher.register_callback(self.cs2_auto_accept.on_match_found)
         self.cs2_watcher.register_condebug_missing_callback(self._on_condebug_missing)
+
+        self.cs2_resolution_switcher = CS2ResolutionSwitcher(self.settings)
 
         # Shared focus monitor: one daemon publishes the focused window;
         # each feature has its own consumer thread that subscribes and reacts
@@ -412,6 +415,9 @@ class QOLApp:
         def check_cs2_auto_accept(_item):
             return self.settings.data.get("cs2_auto_accept_enabled", True)
 
+        def check_cs2_resolution(_item):
+            return self.settings.data.get("cs2_resolution_enabled", False)
+
         def check_auto_lock(_item):
             return self.settings.data.get("auto_lock_enabled", True)
 
@@ -434,6 +440,10 @@ class QOLApp:
 
         def toggle_cs2_auto_accept(_icon, _item):
             self.settings.data["cs2_auto_accept_enabled"] = not self.settings.data.get("cs2_auto_accept_enabled", True)
+            self.settings.save_settings()
+
+        def toggle_cs2_resolution(_icon, _item):
+            self.settings.data["cs2_resolution_enabled"] = not self.settings.data.get("cs2_resolution_enabled", False)
             self.settings.save_settings()
 
         def check_vibrance(_item):
@@ -471,15 +481,15 @@ class QOLApp:
             pystray.MenuItem("Auto Lock", toggle_auto_lock, checked=check_auto_lock),
         )
 
+        cs2_submenu = pystray.Menu(
+            pystray.MenuItem("Auto Accept", toggle_cs2_auto_accept, checked=check_cs2_auto_accept),
+        )
+
         menu_items = [
             pystray.MenuItem(version_label, version_action),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("LoL", lol_submenu),
-            pystray.MenuItem(
-                "CS2 - Auto Accept",
-                toggle_cs2_auto_accept,
-                checked=check_cs2_auto_accept
-            ),
+            pystray.MenuItem("CS2", cs2_submenu),
             pystray.MenuItem(
                 "Dimming",
                 toggle_dimming,
@@ -489,6 +499,11 @@ class QOLApp:
                 "Digital Vibrance",
                 toggle_vibrance,
                 checked=check_vibrance
+            ),
+            pystray.MenuItem(
+                "CS2 Resolution Switch",
+                toggle_cs2_resolution,
+                checked=check_cs2_resolution
             ),
             pystray.MenuItem("Auto Update", toggle_auto_update, checked=check_auto_update),
             pystray.MenuItem("Settings", self.show_settings),
@@ -513,6 +528,7 @@ class QOLApp:
                     pass
             self.lcu_connector.stop()
             self.cs2_watcher.stop()
+            self.cs2_resolution_switcher.stop()
             self.brightness_consumer.stop()
             self.vibrance_consumer.stop()
             self.focus_monitor.stop()
@@ -529,6 +545,7 @@ class QOLApp:
     def run(self):
         self.lcu_connector.start()
         self.cs2_watcher.start()
+        self.cs2_resolution_switcher.start()
         self.focus_monitor.start()
         self.brightness_consumer.start()
         self.vibrance_consumer.start()
