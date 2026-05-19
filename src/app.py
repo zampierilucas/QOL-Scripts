@@ -129,6 +129,12 @@ class QOLApp:
         self.cs2_watcher.register_condebug_missing_callback(self._on_condebug_missing)
 
         self.cs2_resolution_switcher = CS2ResolutionSwitcher(self.settings)
+        self.cs2_watcher.register_cs2_start_callback(
+            self.cs2_resolution_switcher.on_cs2_start
+        )
+        self.cs2_watcher.register_cs2_stop_callback(
+            self.cs2_resolution_switcher.on_cs2_stop
+        )
 
         # Shared focus monitor: one daemon publishes the focused window;
         # each feature has its own consumer thread that subscribes and reacts
@@ -482,7 +488,16 @@ class QOLApp:
         )
 
         cs2_submenu = pystray.Menu(
-            pystray.MenuItem("Auto Accept", toggle_cs2_auto_accept, checked=check_cs2_auto_accept),
+            pystray.MenuItem(
+                "Auto Accept",
+                toggle_cs2_auto_accept,
+                checked=check_cs2_auto_accept,
+            ),
+            pystray.MenuItem(
+                "Resolution Switch",
+                toggle_cs2_resolution,
+                checked=check_cs2_resolution,
+            ),
         )
 
         menu_items = [
@@ -499,11 +514,6 @@ class QOLApp:
                 "Digital Vibrance",
                 toggle_vibrance,
                 checked=check_vibrance
-            ),
-            pystray.MenuItem(
-                "CS2 Resolution Switch",
-                toggle_cs2_resolution,
-                checked=check_cs2_resolution
             ),
             pystray.MenuItem("Auto Update", toggle_auto_update, checked=check_auto_update),
             pystray.MenuItem("Settings", self.show_settings),
@@ -545,7 +555,6 @@ class QOLApp:
     def run(self):
         self.lcu_connector.start()
         self.cs2_watcher.start()
-        self.cs2_resolution_switcher.start()
         self.focus_monitor.start()
         self.brightness_consumer.start()
         self.vibrance_consumer.start()
