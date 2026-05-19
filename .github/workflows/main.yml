@@ -12,12 +12,16 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      artifact-url: ${{ steps.upload.outputs.artifact-url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           architecture: 'x64'
@@ -49,10 +53,23 @@ jobs:
           ls -la dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        id: upload
+        uses: actions/upload-artifact@v5
         with:
           name: qol_scripts
           path: src/dist/QOL-scripts.exe
+
+      - name: Comment build link on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: qol-scripts-build-link
+          message: |
+            ### Build ready for v${{ steps.get_version.outputs.version }}
+
+            - Artifact: ${{ steps.upload.outputs.artifact-url }}
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Commit: `${{ github.event.pull_request.head.sha }}`
 
   release-dev:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -61,7 +78,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: qol_scripts
 
@@ -70,7 +87,7 @@ jobs:
         run: mv "./QOL-scripts.exe" "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
 
       - name: Delete Existing Dev Release
-        uses: actions/github-script@v6
+        uses: actions/github-script@v8
         with:
           script: |
             try {
@@ -90,7 +107,7 @@ jobs:
             }
 
       - name: Create Dev Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: "Development Build (v${{ needs.build.outputs.version }})"
@@ -105,11 +122,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: qol_scripts
 
@@ -143,7 +160,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create Versioned Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: "Release ${{ github.ref_name }}"
           files: "./QOL-scripts-v${{ needs.build.outputs.version }}.exe"
