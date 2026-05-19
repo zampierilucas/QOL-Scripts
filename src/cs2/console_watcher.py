@@ -218,6 +218,8 @@ class CS2ConsoleWatcher:
         self.running = False
         self._callbacks = []
         self._condebug_missing_callbacks = []
+        self._cs2_start_callbacks = []
+        self._cs2_stop_callbacks = []
         self._cs2_path = None
         self._thread = None
 
@@ -227,6 +229,12 @@ class CS2ConsoleWatcher:
     def register_condebug_missing_callback(self, callback):
         """Called when CS2 is running but -condebug is not set (after auto-fix attempt)."""
         self._condebug_missing_callbacks.append(callback)
+
+    def register_cs2_start_callback(self, callback):
+        self._cs2_start_callbacks.append(callback)
+
+    def register_cs2_stop_callback(self, callback):
+        self._cs2_stop_callbacks.append(callback)
 
     def start(self):
         if not self.running:
@@ -257,10 +265,12 @@ class CS2ConsoleWatcher:
                     break
 
                 logger.info("CS2 detected, starting console log watcher...")
+                self._notify_cs2_start()
                 self._tail_console_log()
 
                 if self.running:
                     logger.debug("CS2 closed, will wait for it again")
+                    self._notify_cs2_stop()
                     time.sleep(1.0)
 
             except Exception as e:
@@ -338,3 +348,17 @@ class CS2ConsoleWatcher:
                 cb(session_id)
             except Exception as e:
                 logger.error(f"Error in CS2 match callback: {e}")
+
+    def _notify_cs2_start(self):
+        for cb in self._cs2_start_callbacks:
+            try:
+                cb()
+            except Exception as e:
+                logger.error(f"Error in CS2 start callback: {e}")
+
+    def _notify_cs2_stop(self):
+        for cb in self._cs2_stop_callbacks:
+            try:
+                cb()
+            except Exception as e:
+                logger.error(f"Error in CS2 stop callback: {e}")
