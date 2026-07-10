@@ -203,11 +203,16 @@ class CS2AutoAccept:
         blind_y = origin.y + int(h * ACCEPT_BUTTON_Y_RATIO)
 
         def click(x, y):
-            # Only steal focus if we actually lost it — re-foregrounding every
-            # click is what caused the visible alt-tab flashing.
+            # never click unless CS2 really is foreground — SetForegroundWindow
+            # can be refused, and the click would land in the user's active app
             if user32.GetForegroundWindow() != hwnd:
                 user32.SetForegroundWindow(hwnd)
+                time.sleep(0.05)
+                if user32.GetForegroundWindow() != hwnd:
+                    logger.debug("CS2 not foreground; skipping click")
+                    return False
             self._click_at(x, y)
+            return True
 
         start = time.time()
         clicks = 0          # clicks on the located button
@@ -227,8 +232,7 @@ class CS2AutoAccept:
                         f"[{hits} green hits, mean_rgb={rgb} #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}]"
                     )
                 saw_button = True
-                if now - last_click >= CLICK_THROTTLE_SEC:
-                    click(bx, by)
+                if now - last_click >= CLICK_THROTTLE_SEC and click(bx, by):
                     clicks += 1
                     last_click = now
                     if clicks >= MAX_LOCATED_CLICKS:
@@ -246,11 +250,10 @@ class CS2AutoAccept:
             elif (now - start >= DETECT_DEADLINE_SEC
                   and blind_clicks < MAX_BLIND_CLICKS
                   and now - last_click >= CLICK_THROTTLE_SEC):
-                # Never located the button — minimal blind fallback so the
-                # accept still lands, without the old click/alt-tab spam.
-                click(blind_x, blind_y)
-                blind_clicks += 1
-                last_click = now
+                # blind fallback when the button was never located
+                if click(blind_x, blind_y):
+                    blind_clicks += 1
+                    last_click = now
 
             time.sleep(POLL_INTERVAL_SEC)
 
