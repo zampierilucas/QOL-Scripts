@@ -166,6 +166,7 @@ def set_vibrance(level_percent: int, display_indices: list | None = None) -> boo
     level_percent: 0-100.
     display_indices: list of NVAPI display indices (0-based). None = all displays.
     """
+    global _initialized
     if not _initialized and not init_nvapi():
         return False
 
@@ -184,6 +185,10 @@ def set_vibrance(level_percent: int, display_indices: list | None = None) -> boo
 
     ok = True
     for idx in display_indices:
+        if idx >= len(_display_handles):
+            logger.warning(f"Vibrance display index {idx} out of range ({len(_display_handles)} handles)")
+            ok = False
+            continue
         dvc = _get_dvc_info(idx)
         if dvc is None:
             ok = False
@@ -202,6 +207,8 @@ def set_vibrance(level_percent: int, display_indices: list | None = None) -> boo
             ok = False
         else:
             logger.debug(f"Display {idx}: DVC -> {target} ({level_percent}%)")
+    if not ok:
+        _initialized = False  # handles go stale on display changes; re-enumerate next call
     return ok
 
 

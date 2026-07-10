@@ -1,4 +1,5 @@
 import re
+import time
 import logging
 import screen_brightness_control as sbc
 from threading import Lock, Thread
@@ -8,22 +9,28 @@ from win32con import MONITOR_DEFAULTTONEAREST
 
 logger = logging.getLogger(__name__)
 
-# Module-level monitor cache (populated once at startup)
 _monitors_cache = None
+_cache_time = 0.0
+_CACHE_TTL_SEC = 300  # displays can be hot-plugged/undocked
 
 
 def init_monitors_cache():
-    """Initialize the monitor cache. Call once at startup."""
-    global _monitors_cache
+    """Populate the monitor cache (slow: WMI/DDC enumeration)."""
+    global _monitors_cache, _cache_time
     _monitors_cache = sbc.list_monitors_info()
+    _cache_time = time.monotonic()
     logger.info(f"Cached {len(_monitors_cache)} monitors")
     return _monitors_cache
 
 
+def invalidate_monitors_cache():
+    global _cache_time
+    _cache_time = 0.0
+
+
 def get_cached_monitors():
-    """Get cached monitor info. Returns empty list if not initialized."""
-    if _monitors_cache is None:
-        logger.warning("Monitor cache not initialized, initializing now")
+    """Cached monitor info, re-enumerated when stale."""
+    if _monitors_cache is None or time.monotonic() - _cache_time > _CACHE_TTL_SEC:
         return init_monitors_cache()
     return _monitors_cache
 
@@ -69,6 +76,7 @@ def set_brightness_side_monitors(brightness, monitor_ids):
             sbc.set_brightness(brightness, display=monitor_id)
         except Exception as e:
             logger.error(f"Failed to set brightness for {monitor_id}: {e}")
+            invalidate_monitors_cache()  # likely a detached monitor
 
 
 def get_focused_monitor_info():
