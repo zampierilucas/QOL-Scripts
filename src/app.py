@@ -558,3 +558,45 @@ class QOLApp:
                 return
             time.sleep(0.1)
         logger.debug("pystray HWNDs never appeared; skipping dark menu opt-in")
+
+
+def _setup_logging(debug: bool):
+    """Configure logging for a standalone/source run. Always writes to a
+    rotating file so headless (pythonw / startup) runs stay debuggable with no
+    console, and also mirrors to the console when one is attached."""
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = os.path.join(os.environ.get("LOCALAPPDATA", tempfile.gettempdir()), PROGRAM_NAME)
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "app.log")
+
+    handlers = [RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")]
+    if sys.stderr is not None:  # sys.stderr is None under pythonw
+        handlers.append(logging.StreamHandler())
+
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        handlers=handlers,
+    )
+    for noisy in ("screen_brightness_control", "PIL", "urllib3", "requests", "comtypes"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    return log_path
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="QOL-Scripts")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    log_path = _setup_logging(args.debug)
+    logger.info(f"Starting QOL-Scripts v{VERSION} (source) — logging to {log_path}")
+
+    app = QOLApp()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        logger.debug("Received Ctrl+C. Shutting down...")
+        app.stop()

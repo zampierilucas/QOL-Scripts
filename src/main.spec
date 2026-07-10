@@ -1,49 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
-import os
-spec_dir = os.path.dirname(os.path.abspath(SPEC))
-
 a = Analysis(
     ['main.py'],
-    pathex=[spec_dir],
+    pathex=[],
     binaries=[],
     datas=[],
     hiddenimports=[
         'win32gui',
         'win32api',
-        'win32con',
+        'win32con', 
         'win32com.client',
         'winshell',
+        'winreg',
         'screen_brightness_control',
         'pywinstyles',
         'sv_ttk',
         'darkdetect',
+        'pyautogui',
         'pystray',
         'PIL',
-        'appdirs',
-        'lol',
-        'lol.auto_accept',
-        'lol.auto_pick',
-        'lol.lcu_api',
-        'lol.connector_base',
-        'settings',
-        'brightness',
-        'settings_window',
-        'app',
-        '_version',
-        'urllib3',
         'requests',
-        'lcu_driver',
-        'aiohttp',
-        'certifi',
+        'appdirs',
+        'json',
+        'base64',
+        'io'
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=2,
 )
 pyz = PYZ(a.pure)
 
@@ -57,7 +44,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
