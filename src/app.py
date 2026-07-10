@@ -419,8 +419,6 @@ class QOLApp:
             self.settings.data["dimming_enabled"] = not self.settings.data["dimming_enabled"]
             self.settings.save_settings()
             if not self.settings.data["dimming_enabled"]:
-                # Restore what was actually dimmed — dim-all mode dims monitors
-                # that are not in dimmable_monitors.
                 self.brightness_consumer.restore_dimmed()
 
         def toggle_auto_accept(_icon, _item):

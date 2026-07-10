@@ -102,19 +102,12 @@ def get_focused_monitor_info():
 
 
 def get_focused_monitor_uid():
-    """Resolve the focused window's monitor to its device UID.
-
-    This is the same 'UID<n>' token screen_brightness_control derives its
-    'uid' info field from (both come from EnumDisplayDevices' DeviceID), so
-    monitors are matched by hardware identity instead of assuming GDI
-    display numbering and sbc's enumeration order line up.
-    """
+    """UID of the focused window's monitor — matches sbc's 'uid' info field."""
     device_name = get_focused_monitor_info()
     if not device_name:
         return None
     try:
-        # Mirror sbc's enum_display_devices: probe adaptor indices, flag 1
-        # (EDD_GET_DEVICE_INTERFACE_NAME) populates DeviceID.
+        # flag 1 (EDD_GET_DEVICE_INTERFACE_NAME) populates DeviceID
         for adaptor_index in range(5):
             try:
                 device = EnumDisplayDevices(device_name, adaptor_index, 1)
@@ -131,12 +124,7 @@ def get_focused_monitor_uid():
 
 
 def get_all_monitor_serials_except_focused():
-    """
-    Get all monitor serials except the one containing the focused window.
-
-    Returns [] whenever the focused monitor cannot be positively identified,
-    so callers dim nothing rather than dimming the monitor the game is on.
-    """
+    """All monitor serials except the focused one; [] if it can't be identified."""
     try:
         focused_uid = get_focused_monitor_uid()
         if focused_uid is None:
@@ -172,9 +160,7 @@ class BrightnessFocusConsumer:
         self.focus_monitor = focus_monitor
         self._thread = None
         self._running = False
-        # Serials we dimmed and have not yet restored. Dim-all mode dims
-        # monitors that are not in dimmable_monitors, so restore paths must
-        # target what was actually dimmed, not the configured list.
+        # serials we dimmed and have not yet restored
         self._dimmed = set()
         self._dimmed_lock = Lock()
 
@@ -190,10 +176,7 @@ class BrightnessFocusConsumer:
         self._running = False
 
     def restore_dimmed(self):
-        """Restore every monitor this consumer dimmed to 'high'.
-
-        Used when dimming is toggled off and on shutdown; a no-op when
-        nothing is currently dimmed."""
+        """Restore every monitor this consumer dimmed to 'high'."""
         with self._dimmed_lock:
             dimmed = list(self._dimmed)
             self._dimmed.clear()
@@ -229,9 +212,6 @@ class BrightnessFocusConsumer:
                 no_longer_dimmed = self._dimmed - target
                 newly_dimmed = target - self._dimmed
             if no_longer_dimmed:
-                # Focus moved between two tracked games: the monitor hosting
-                # the newly focused game was dimmed a moment ago and would
-                # otherwise stay dark under the game.
                 logger.debug(f"Restoring monitors that left the dim set: {sorted(no_longer_dimmed)}")
                 set_brightness_side_monitors(brightness_settings["high"], no_longer_dimmed)
             if newly_dimmed:
@@ -241,8 +221,5 @@ class BrightnessFocusConsumer:
                 self._dimmed -= no_longer_dimmed
                 self._dimmed |= newly_dimmed
         else:
-            # Restore only what this consumer dimmed. Touching every monitor
-            # here would clobber manually-set brightness on monitors excluded
-            # from dimming and re-issue slow DDC/CI writes on every window
-            # switch between non-game windows.
+            # only what we dimmed — other monitors may be manually adjusted
             self.restore_dimmed()
