@@ -227,19 +227,22 @@ class BrightnessFocusConsumer:
             target = {m for m in monitors_to_dim if m}
             with self._dimmed_lock:
                 no_longer_dimmed = self._dimmed - target
+                newly_dimmed = target - self._dimmed
             if no_longer_dimmed:
                 # Focus moved between two tracked games: the monitor hosting
                 # the newly focused game was dimmed a moment ago and would
                 # otherwise stay dark under the game.
                 logger.debug(f"Restoring monitors that left the dim set: {sorted(no_longer_dimmed)}")
                 set_brightness_side_monitors(brightness_settings["high"], no_longer_dimmed)
-            logger.debug(f"Game focused - dimming monitors: {sorted(target)}")
-            set_brightness_side_monitors(brightness_settings["low"], target)
+            if newly_dimmed:
+                logger.debug(f"Game focused - dimming monitors: {sorted(newly_dimmed)}")
+                set_brightness_side_monitors(brightness_settings["low"], newly_dimmed)
             with self._dimmed_lock:
                 self._dimmed -= no_longer_dimmed
-                self._dimmed |= target
+                self._dimmed |= newly_dimmed
         else:
-            logger.debug("Game unfocused - restoring all monitors")
-            set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
-            with self._dimmed_lock:
-                self._dimmed.clear()
+            # Restore only what this consumer dimmed. Touching every monitor
+            # here would clobber manually-set brightness on monitors excluded
+            # from dimming and re-issue slow DDC/CI writes on every window
+            # switch between non-game windows.
+            self.restore_dimmed()
