@@ -134,13 +134,12 @@ class LoLAutoPick:
 
             # Schedule lock timer if not already scheduled
             if self.lock_timer_task is None or self.lock_timer_task.done():
-                delay_ms = time_left - self.AUTO_LOCK_THRESHOLD_MS
-                if delay_ms > 0:
-                    delay_sec = delay_ms / 1000.0
-                    logger.debug(f"Scheduling auto-lock in {delay_sec:.1f}s")
-                    self.lock_timer_task = asyncio.create_task(
-                        self._auto_lock_after_delay(delay_sec)
-                    )
+                # clamp: already under the threshold means lock now, not never
+                delay_sec = max(0, time_left - self.AUTO_LOCK_THRESHOLD_MS) / 1000.0
+                logger.debug(f"Scheduling auto-lock in {delay_sec:.1f}s")
+                self.lock_timer_task = asyncio.create_task(
+                    self._auto_lock_after_delay(delay_sec)
+                )
         elif not is_our_turn:
             # Not our turn anymore, cancel any pending timer
             self._cancel_lock_timer()
