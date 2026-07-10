@@ -1,7 +1,7 @@
 import re
 import logging
 import screen_brightness_control as sbc
-from threading import Thread
+from threading import Lock, Thread
 from win32gui import GetForegroundWindow
 from win32api import EnumDisplayDevices, GetMonitorInfo, MonitorFromWindow
 from win32con import MONITOR_DEFAULTTONEAREST
@@ -172,6 +172,11 @@ class BrightnessFocusConsumer:
         self.focus_monitor = focus_monitor
         self._thread = None
         self._running = False
+        # Serials we dimmed and have not yet restored. Dim-all mode dims
+        # monitors that are not in dimmable_monitors, so restore paths must
+        # target what was actually dimmed, not the configured list.
+        self._dimmed = set()
+        self._dimmed_lock = Lock()
 
     def start(self):
         if self._running:
@@ -183,6 +188,18 @@ class BrightnessFocusConsumer:
     def stop(self):
         # FocusMonitor.stop() will notify_all and our wait() returns None.
         self._running = False
+
+    def restore_dimmed(self):
+        """Restore every monitor this consumer dimmed to 'high'.
+
+        Used when dimming is toggled off and on shutdown; a no-op when
+        nothing is currently dimmed."""
+        with self._dimmed_lock:
+            dimmed = list(self._dimmed)
+            self._dimmed.clear()
+        if dimmed:
+            logger.debug(f"Restoring previously dimmed monitors: {dimmed}")
+            set_brightness_side_monitors(self.settings.data["monitor_brightness"]["high"], dimmed)
 
     def _run(self):
         sub = self.focus_monitor.subscribe()
@@ -209,6 +226,10 @@ class BrightnessFocusConsumer:
                                else self.settings.data["dimmable_monitors"])
             logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
             set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
+            with self._dimmed_lock:
+                self._dimmed.update(m for m in monitors_to_dim if m)
         else:
             logger.debug("Game unfocused - restoring all monitors")
             set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
+            with self._dimmed_lock:
+                self._dimmed.clear()

@@ -419,10 +419,9 @@ class QOLApp:
             self.settings.data["dimming_enabled"] = not self.settings.data["dimming_enabled"]
             self.settings.save_settings()
             if not self.settings.data["dimming_enabled"]:
-                set_brightness_side_monitors(
-                    self.settings.data["monitor_brightness"]["high"],
-                    self.settings.data["dimmable_monitors"]
-                )
+                # Restore what was actually dimmed — dim-all mode dims monitors
+                # that are not in dimmable_monitors.
+                self.brightness_consumer.restore_dimmed()
 
         def toggle_auto_accept(_icon, _item):
             self.settings.data["auto_accept_enabled"] = not self.settings.data["auto_accept_enabled"]
@@ -517,11 +516,7 @@ class QOLApp:
             self.vibrance_consumer.stop()
             self.focus_monitor.stop()
             self.icon.stop()
-            if self.settings.data["dimming_enabled"]:
-                set_brightness_side_monitors(
-                    self.settings.data["monitor_brightness"]["high"],
-                    self.settings.data["dimmable_monitors"]
-                )
+            self.brightness_consumer.restore_dimmed()
             if self.settings.data.get("vibrance_enabled", False):
                 vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
                 set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
