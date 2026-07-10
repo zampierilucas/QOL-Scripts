@@ -224,10 +224,20 @@ class BrightnessFocusConsumer:
             monitors_to_dim = (get_all_monitor_serials_except_focused()
                                if dim_all_mode
                                else self.settings.data["dimmable_monitors"])
-            logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
-            set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
+            target = {m for m in monitors_to_dim if m}
             with self._dimmed_lock:
-                self._dimmed.update(m for m in monitors_to_dim if m)
+                no_longer_dimmed = self._dimmed - target
+            if no_longer_dimmed:
+                # Focus moved between two tracked games: the monitor hosting
+                # the newly focused game was dimmed a moment ago and would
+                # otherwise stay dark under the game.
+                logger.debug(f"Restoring monitors that left the dim set: {sorted(no_longer_dimmed)}")
+                set_brightness_side_monitors(brightness_settings["high"], no_longer_dimmed)
+            logger.debug(f"Game focused - dimming monitors: {sorted(target)}")
+            set_brightness_side_monitors(brightness_settings["low"], target)
+            with self._dimmed_lock:
+                self._dimmed -= no_longer_dimmed
+                self._dimmed |= target
         else:
             logger.debug("Game unfocused - restoring all monitors")
             set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
