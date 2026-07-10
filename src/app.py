@@ -106,6 +106,7 @@ class QOLApp:
         _enable_dark_menus_process()
         self.create_tray_icon()
         self.running = True
+        self._stopping = False
         self.install_dir = os.path.join(os.environ['LOCALAPPDATA'], 'Programs', PROGRAM_NAME)
         self.startup_shortcut = os.path.join(winshell.startup(), f"{PROGRAM_NAME}.lnk")
         self.sync_startup_version()
@@ -500,24 +501,27 @@ class QOLApp:
         self.settings_requested = True
 
     def stop(self, _icon=None, _item=None):
-        if self.running:
-            self.running = False
-            if self.settings_window:
-                try:
-                    # Schedule destroy on the main thread to avoid tkinter threading issues
-                    self.settings_window.root.after(0, self.settings_window.root.destroy)
-                except Exception:
-                    pass
-            self.lcu_connector.stop()
-            self.cs2_watcher.stop()
-            self.brightness_consumer.stop()
-            self.vibrance_consumer.stop()
-            self.focus_monitor.stop()
-            self.icon.stop()
-            self.brightness_consumer.restore_dimmed()
-            if self.settings.data.get("vibrance_enabled", False):
-                vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
-                set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
+        if not self.running or self._stopping:
+            return
+        self._stopping = True
+        if self.settings_window:
+            try:
+                # Schedule destroy on the main thread to avoid tkinter threading issues
+                self.settings_window.root.after(0, self.settings_window.root.destroy)
+            except Exception:
+                pass
+        self.lcu_connector.stop()
+        self.cs2_watcher.stop()
+        self.brightness_consumer.stop()
+        self.vibrance_consumer.stop()
+        self.focus_monitor.stop()
+        self.icon.stop()
+        self.brightness_consumer.restore_dimmed()
+        if self.settings.data.get("vibrance_enabled", False):
+            vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
+            set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
+        # last: run() exiting ends the process, killing this daemon thread
+        self.running = False
 
     def run(self):
         self.lcu_connector.start()
