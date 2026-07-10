@@ -3,7 +3,7 @@ import logging
 import screen_brightness_control as sbc
 from threading import Thread
 from win32gui import GetForegroundWindow
-from win32api import GetMonitorInfo, MonitorFromWindow
+from win32api import EnumDisplayDevices, GetMonitorInfo, MonitorFromWindow
 from win32con import MONITOR_DEFAULTTONEAREST
 
 logger = logging.getLogger(__name__)
@@ -101,39 +101,57 @@ def get_focused_monitor_info():
         return None
 
 
+def get_focused_monitor_uid():
+    """Resolve the focused window's monitor to its device UID.
+
+    This is the same 'UID<n>' token screen_brightness_control derives its
+    'uid' info field from (both come from EnumDisplayDevices' DeviceID), so
+    monitors are matched by hardware identity instead of assuming GDI
+    display numbering and sbc's enumeration order line up.
+    """
+    device_name = get_focused_monitor_info()
+    if not device_name:
+        return None
+    try:
+        # Mirror sbc's enum_display_devices: probe adaptor indices, flag 1
+        # (EDD_GET_DEVICE_INTERFACE_NAME) populates DeviceID.
+        for adaptor_index in range(5):
+            try:
+                device = EnumDisplayDevices(device_name, adaptor_index, 1)
+            except Exception:
+                continue
+            match = re.search(r'UID(\d+)', device.DeviceID)
+            if match:
+                return match.group(1)
+        logger.debug(f"No device UID found for {device_name}")
+        return None
+    except Exception as e:
+        logger.error(f"Error resolving focused monitor UID: {e}")
+        return None
+
+
 def get_all_monitor_serials_except_focused():
     """
-    Get all monitor serials except the one containing the focused window
+    Get all monitor serials except the one containing the focused window.
+
+    Returns [] whenever the focused monitor cannot be positively identified,
+    so callers dim nothing rather than dimming the monitor the game is on.
     """
     try:
-        focused_device = get_focused_monitor_info()
-        if not focused_device:
-            logger.debug("Cannot detect focused monitor, returning empty list")
+        focused_uid = get_focused_monitor_uid()
+        if focused_uid is None:
+            logger.debug("Cannot identify focused monitor, returning empty list")
             return []
 
-        match = re.search(r'DISPLAY(\d+)', focused_device)
-        if match:
-            focused_display_index = int(match.group(1)) - 1
-            logger.debug(f"Focused display index: {focused_display_index}")
-        else:
-            logger.debug(f"Could not parse display number from: {focused_device}")
-            focused_display_index = 0
-
         monitors_info = get_cached_monitors()
-        logger.debug(f"Total monitors found: {len(monitors_info)}")
+        if not any(info.get('uid') == focused_uid for info in monitors_info):
+            logger.debug(f"Focused monitor UID {focused_uid} not in monitor list, returning empty list")
+            return []
 
-        non_focused_serials = []
-
-        for idx, info in enumerate(monitors_info):
-            serial = info.get('serial', '')
-            logger.debug(f"Monitor {idx}: serial={serial}, name={info.get('name', 'Unknown')}")
-
-            if idx != focused_display_index:
-                non_focused_serials.append(serial)
-                logger.debug("  -> Adding to dim list")
-            else:
-                logger.debug("  -> Skipping (focused monitor)")
-
+        non_focused_serials = [
+            info.get('serial', '') for info in monitors_info
+            if info.get('uid') != focused_uid
+        ]
         logger.debug(f"Monitors to dim (serials): {non_focused_serials}")
         return non_focused_serials
 
