@@ -581,6 +581,17 @@ def _setup_logging(debug: bool):
     return log_path
 
 
+_instance_mutex = None
+
+
+def _acquire_single_instance() -> bool:
+    """Hold a named mutex for the process lifetime; False if already taken."""
+    global _instance_mutex
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _instance_mutex = kernel32.CreateMutexW(None, False, "QOL-Scripts-single-instance")
+    return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -589,6 +600,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     log_path = _setup_logging(args.debug)
+    if not _acquire_single_instance():
+        logger.warning("Another QOL-Scripts instance is already running; exiting")
+        sys.exit(0)
     logger.info(f"Starting QOL-Scripts v{VERSION} (source) — logging to {log_path}")
 
     app = QOLApp()
