@@ -132,10 +132,10 @@ def _find_accept_button(ox: int, oy: int, w: int, h: int):
                     sum_g += g
                     sum_b += b
                     hits += 1
-                    if x < min_x: min_x = x
-                    if x > max_x: max_x = x
-                    if y < min_y: min_y = y
-                    if y > max_y: max_y = y
+                    min_x = min(min_x, x)
+                    max_x = max(max_x, x)
+                    min_y = min(min_y, y)
+                    max_y = max(max_y, y)
                 x += step
             y += step
         if hits < MIN_GREEN_HITS:
