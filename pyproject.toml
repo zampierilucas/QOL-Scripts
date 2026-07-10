@@ -24,7 +24,7 @@ line-length = 120
 
 [tool.ruff.lint]
 ignore = [
-    "E402",  # Module level import not at top — intentional in main.py and app.py
+    "E402",  # Module level import not at top — intentional in app.py
 ]
 
 [project.optional-dependencies]
@@ -39,4 +39,4 @@ min_confidence = 100  # only show definite unused code (callbacks/decorators are
 
 [tool.pyinstaller]
 # Configuration reference for PyInstaller (actual build uses main.spec)
-script = "src/main.py"
+script = "src/app.py"

@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['main.py'],
+    ['app.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -17,8 +17,10 @@ a = Analysis(
         'pywinstyles',
         'sv_ttk',
         'darkdetect',
-        'pyautogui',
         'pystray',
+        'lcu_driver',
+        'win32_window_monitor',
+        'packaging',
         'PIL',
         'requests',
         'appdirs',

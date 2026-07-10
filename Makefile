@@ -30,15 +30,15 @@ dead:
 
 # Compile check for syntax errors
 compile:
-	$(PYTHON) -m py_compile $(SRC_DIR)/main.py
+	$(PYTHON) -m compileall -q $(SRC_DIR)
 
 # Run without compiling
 run:
-	$(PYTHON) $(SRC_DIR)/main.py
+	$(PYTHON) $(SRC_DIR)/app.py
 
 # Run with debug mode
 debug:
-	$(PYTHON) $(SRC_DIR)/main.py --debug
+	$(PYTHON) $(SRC_DIR)/app.py --debug
 
 # Build executable with PyInstaller (uses cache for speed)
 build: dist
