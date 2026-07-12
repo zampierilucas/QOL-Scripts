@@ -12,9 +12,6 @@ logger = logging.getLogger(__name__)
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 
-# Per-pixel GetPixel on the desktop DC forces a DWM readback each call (~17ms),
-# so scanning thousands of points that way takes ~a minute. Instead we BitBlt
-# the region once into a memory DC and scan the resulting buffer in-process.
 _SRCCOPY = 0x00CC0020
 gdi32.CreateCompatibleDC.restype = wintypes.HDC
 gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
@@ -30,6 +27,8 @@ gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, winty
                             ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
 gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
 gdi32.DeleteDC.argtypes = [wintypes.HDC]
+user32.PrintWindow.restype = wintypes.BOOL
+user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
 
 
 class _BITMAPINFOHEADER(ctypes.Structure):
@@ -43,114 +42,137 @@ class _BITMAPINFOHEADER(ctypes.Structure):
     ]
 
 CS2_WINDOW_TITLE = "Counter-Strike 2"
-# Safety net cooldown — only triggers if session_id is missing for some reason.
-# Primary dedup is per-session-id (set by CS2 for each new banner).
-ACCEPT_COOLDOWN_SEC = 5.0
+ACCEPT_COOLDOWN_SEC = 5.0  # safety net when session_id is missing
 
-# The CS2 ready-check "Accept" button is a solid green (measured (54,183,82)).
-# We LOCATE it by scanning for that green rather than assuming a fixed position
-# (the popup location varies with resolution/UI scale), click its centre, then
-# stop. CS2's console log (-condebug) does NOT record the local accept, so this
-# screen-side signal is the only reliable "we succeeded" cue.
-ACCEPT_GREEN = (54, 183, 82)
+# proven click spot — scales with the client rect; detection below only decides WHEN to click
+ACCEPT_BUTTON_X_RATIO = 0.5
+ACCEPT_BUTTON_Y_RATIO = 0.42
+
+
+def _force_foreground(hwnd) -> bool:
+    """Bring hwnd to foreground; the ALT nudge lifts the SetForegroundWindow restriction."""
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    win32api.keybd_event(0x12, 0, 0, 0)                          # ALT down
+    win32api.keybd_event(0x12, 0, win32con.KEYEVENTF_KEYUP, 0)   # ALT up
+    user32.SetForegroundWindow(hwnd)
+    return user32.GetForegroundWindow() == hwnd
 
 
 def _is_accept_green(r: int, g: int, b: int) -> bool:
-    """Hue-dominance test: green clearly the strongest channel. Robust to
-    digital-vibrance saturation boosts / gamma shifts, and won't match the
-    beige menu behind the popup."""
-    return g >= 70 and (g - r) >= 35 and (g - b) >= 35
+    """Full-strength button green (54,183,82) only — mid-fade/blended greens must fail."""
+    return g >= 140 and (g - r) >= 80 and (g - b) >= 80
 
 
-# Scan a generous central band where the ready-check popup lives (fractions of
-# the client rect). Coarse step keeps it light — the button is a large solid
-# block, so a step this size still lands many hits on it.
+# central band of the client rect where the ready-check popup lives
 SCAN_X0, SCAN_X1 = 0.20, 0.80
 SCAN_Y0, SCAN_Y1 = 0.25, 0.75
-SCAN_STEP_PX = 22
-MIN_GREEN_HITS = 12          # need a big solid cluster, not stray/animated menu green
-# The button is compact; reject green scattered across the scene (menu foliage).
-MAX_CLUSTER_SPAN = 0.35      # green bounding box must fit within this fraction of the scan band
+MIN_BUTTON_PTS = 20    # measured: button = 111 grid points (49 when half-covered), title/icons ≤ 42
+MIN_BUTTON_FILL = 0.6  # measured: button region is 0.87 solid green, title lettering only 0.10
 
 CLICK_THROTTLE_SEC = 0.5      # min gap between clicks
-POLL_INTERVAL_SEC = 0.1       # how often we re-scan (a scan is ~16ms)
-MAX_ACCEPT_SECONDS = 10.0     # overall cap on the attempt
-MAX_LOCATED_CLICKS = 2        # once we've clicked the located button this many times, we're done
-DETECT_DEADLINE_SEC = 4.0     # if not located by now, fall back to a few blind clicks
-MAX_BLIND_CLICKS = 3          # minimal fallback so accepts still land if the scan fails
-ACCEPT_BUTTON_Y_RATIO = 0.42  # blind-fallback vertical position (centre-ish)
+POLL_INTERVAL_SEC = 0.1       # re-scan rate while the button is on screen (a scan is ~16ms)
+MAX_ACCEPT_SECONDS = 25.0     # ready-check lifetime — keep watching this long
+WINDOW_CHECK_INTERVAL = 0.4   # slower rate while it isn't (PrintWindow is heavier)
 
 
-def _find_accept_button(ox: int, oy: int, w: int, h: int):
-    """BitBlt the central band of the CS2 client area, then scan the buffer for
-    the green Accept button. Returns (screen_x, screen_y, green_hits, mean_rgb)
-    of the green cluster's centroid, or None. mean_rgb is logged so we can tell
-    the accept button's green apart from other green UI (e.g. the post-accept
-    checkmark panel) when tuning."""
-    rx, ry = ox + int(w * SCAN_X0), oy + int(h * SCAN_Y0)
-    rw, rh = int(w * (SCAN_X1 - SCAN_X0)), int(h * (SCAN_Y1 - SCAN_Y0))
-    if rw <= 0 or rh <= 0:
-        return None
-
+def _grab_pixels(capture, cw: int, ch: int):
+    """Capture cw×ch via capture(memdc, screen_dc) into a top-down BGRA buffer."""
     screen = user32.GetDC(0)
     if not screen:
         return None
     memdc = gdi32.CreateCompatibleDC(screen)
-    hbm = gdi32.CreateCompatibleBitmap(screen, rw, rh)
+    hbm = gdi32.CreateCompatibleBitmap(screen, cw, ch)
     old = gdi32.SelectObject(memdc, hbm)
     try:
-        if not gdi32.BitBlt(memdc, 0, 0, rw, rh, screen, rx, ry, _SRCCOPY):
+        if not capture(memdc, screen):
             return None
+        gdi32.SelectObject(memdc, old)  # deselect before GetDIBits
         bmi = _BITMAPINFOHEADER()
         bmi.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
-        bmi.biWidth = rw
-        bmi.biHeight = -rh   # negative → top-down rows
+        bmi.biWidth = cw
+        bmi.biHeight = -ch   # negative → top-down rows
         bmi.biPlanes = 1
         bmi.biBitCount = 32
         bmi.biCompression = 0  # BI_RGB
-        buf = (ctypes.c_ubyte * (rw * rh * 4))()
-        if gdi32.GetDIBits(memdc, hbm, 0, rh, buf, ctypes.byref(bmi), 0) == 0:
+        buf = (ctypes.c_ubyte * (cw * ch * 4))()
+        if gdi32.GetDIBits(memdc, hbm, 0, ch, buf, ctypes.byref(bmi), 0) == 0:
             return None
-
-        stride = rw * 4
-        step = SCAN_STEP_PX
-        sum_x = sum_y = hits = 0
-        sum_r = sum_g = sum_b = 0
-        min_x = min_y = 1 << 30
-        max_x = max_y = -1
-        y = 0
-        while y < rh:
-            row = y * stride
-            x = 0
-            while x < rw:
-                i = row + x * 4        # buffer is BGRA
-                r, g, b = buf[i + 2], buf[i + 1], buf[i]
-                if _is_accept_green(r, g, b):
-                    sum_x += x
-                    sum_y += y
-                    sum_r += r
-                    sum_g += g
-                    sum_b += b
-                    hits += 1
-                    min_x = min(min_x, x)
-                    max_x = max(max_x, x)
-                    min_y = min(min_y, y)
-                    max_y = max(max_y, y)
-                x += step
-            y += step
-        if hits < MIN_GREEN_HITS:
-            return None
-        # Reject green scattered across the scene (animated menu foliage): the
-        # accept button's green must be a compact block.
-        if (max_x - min_x) > MAX_CLUSTER_SPAN * rw or (max_y - min_y) > MAX_CLUSTER_SPAN * rh:
-            return None
-        mean_rgb = (sum_r // hits, sum_g // hits, sum_b // hits)
-        return (rx + sum_x // hits, ry + sum_y // hits, hits, mean_rgb)
+        return buf
     finally:
         gdi32.SelectObject(memdc, old)
         gdi32.DeleteObject(hbm)
         gdi32.DeleteDC(memdc)
         user32.ReleaseDC(0, screen)
+
+
+def _scan_band(buf, buf_w: int, x0: int, y0: int, x1: int, y1: int):
+    """Find the button: the one big, mostly-solid green region (title/timer/checkmarks are not)."""
+    stride = buf_w * 4
+    step = max(8, (y1 - y0) // 39)   # 22px at 1728p — scales so grid density matches any resolution
+    green = {}
+    y = y0
+    while y < y1:
+        row = y * stride
+        x = x0
+        while x < x1:
+            i = row + x * 4        # buffer is BGRA
+            r, g, b = buf[i + 2], buf[i + 1], buf[i]
+            if _is_accept_green(r, g, b):
+                green[(x, y)] = (r, g, b)
+            x += step
+        y += step
+
+    todo = set(green)
+    best = None
+    while todo:
+        comp = [todo.pop()]
+        for cx, cy in comp:        # comp grows while iterating — flood fill
+            for n in ((cx - step, cy), (cx + step, cy), (cx, cy - step), (cx, cy + step)):
+                if n in todo:
+                    todo.remove(n)
+                    comp.append(n)
+        if len(comp) < MIN_BUTTON_PTS or (best and len(comp) <= best[0]):
+            continue
+        xs = sorted(p[0] for p in comp)
+        ys = sorted(p[1] for p in comp)
+        bw, bh = xs[-1] - xs[0] + step, ys[-1] - ys[0] + step
+        if len(comp) * step * step >= MIN_BUTTON_FILL * bw * bh:
+            best = (len(comp), xs[0] + bw // 2, ys[0] + bh // 2)
+    if best is None:
+        return None
+    hits, bx, by = best
+    mean = tuple(sum(green[p][k] for p in green) // len(green) for k in range(3))
+    return (bx, by, hits, mean)
+
+
+def _find_accept_button(ox: int, oy: int, w: int, h: int):
+    """Find the button as visible on screen → (screen_x, screen_y, hits, mean_rgb)."""
+    rx, ry = ox + int(w * SCAN_X0), oy + int(h * SCAN_Y0)
+    rw, rh = int(w * (SCAN_X1 - SCAN_X0)), int(h * (SCAN_Y1 - SCAN_Y0))
+    if rw <= 0 or rh <= 0:
+        return None
+    buf = _grab_pixels(
+        lambda memdc, screen: gdi32.BitBlt(memdc, 0, 0, rw, rh, screen, rx, ry, _SRCCOPY),
+        rw, rh,
+    )
+    if buf is None:
+        return None
+    found = _scan_band(buf, rw, 0, 0, rw, rh)
+    if found is None:
+        return None
+    cx, cy, hits, rgb = found
+    return (rx + cx, ry + cy, hits, rgb)
+
+
+def _banner_in_window(hwnd, w: int, h: int) -> bool:
+    """Banner still in CS2's own rendered content, even if covered on screen?"""
+    if w <= 0 or h <= 0:
+        return False
+    # 1|2 = PW_CLIENTONLY | PW_RENDERFULLCONTENT
+    buf = _grab_pixels(lambda memdc, screen: user32.PrintWindow(hwnd, memdc, 1 | 2), w, h)
+    return buf is not None and _scan_band(buf, w,
+                                          int(w * SCAN_X0), int(h * SCAN_Y0),
+                                          int(w * SCAN_X1), int(h * SCAN_Y1)) is not None
 
 
 class CS2AutoAccept:
@@ -186,12 +208,7 @@ class CS2AutoAccept:
             logger.warning("CS2 window not found for auto-accept")
             return
 
-        # Foreground immediately — no blind pre-sleep. The scan loop below only
-        # clicks once the green button is actually rendered, so it naturally
-        # waits out both the foreground transition and the banner fade-in.
-        SW_RESTORE = 9
-        user32.ShowWindow(hwnd, SW_RESTORE)
-        user32.SetForegroundWindow(hwnd)
+        _force_foreground(hwnd)
 
         rect = wintypes.RECT()
         user32.GetClientRect(hwnd, ctypes.byref(rect))
@@ -199,25 +216,13 @@ class CS2AutoAccept:
         user32.ClientToScreen(hwnd, ctypes.byref(origin))
         w = rect.right - rect.left
         h = rect.bottom - rect.top
-        blind_x = origin.x + w // 2
-        blind_y = origin.y + int(h * ACCEPT_BUTTON_Y_RATIO)
-
-        def click(x, y):
-            # never click unless CS2 really is foreground — SetForegroundWindow
-            # can be refused, and the click would land in the user's active app
-            if user32.GetForegroundWindow() != hwnd:
-                user32.SetForegroundWindow(hwnd)
-                time.sleep(0.05)
-                if user32.GetForegroundWindow() != hwnd:
-                    logger.debug("CS2 not foreground; skipping click")
-                    return False
-            self._click_at(x, y)
-            return True
+        click_x = origin.x + int(w * ACCEPT_BUTTON_X_RATIO)
+        click_y = origin.y + int(h * ACCEPT_BUTTON_Y_RATIO)
 
         start = time.time()
-        clicks = 0          # clicks on the located button
-        blind_clicks = 0    # fallback clicks when never located
-        saw_button = False
+        clicks = 0
+        seen = False            # banner detected at least once
+        waiting_logged = False
         last_click = 0.0
 
         while time.time() - start < MAX_ACCEPT_SECONDS:
@@ -226,43 +231,35 @@ class CS2AutoAccept:
 
             if found:
                 bx, by, hits, rgb = found
-                if not saw_button:
-                    logger.info(
-                        f"CS2 accept button located at ({bx},{by}) "
-                        f"[{hits} green hits, mean_rgb={rgb} #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}]"
-                    )
-                saw_button = True
-                if now - last_click >= CLICK_THROTTLE_SEC and click(bx, by):
-                    clicks += 1
-                    last_click = now
-                    if clicks >= MAX_LOCATED_CLICKS:
-                        # First click accepts; a second is insurance. Done —
-                        # don't keep clicking (that's the behaviour we're fixing).
-                        logger.info(
-                            f"CS2 accepted — clicked located button {clicks}x at ({bx},{by}), "
-                            f"last mean_rgb={rgb}"
-                        )
-                        return
-            elif saw_button and clicks > 0:
-                # Button was there, we clicked, now it's gone → accepted. Stop.
-                logger.info(f"CS2 accept button gone after {clicks} click(s) — accepted")
+                if not seen:
+                    logger.info(f"CS2 accept button at ({bx},{by}) [{hits} pts, rgb={rgb}], clicking ({click_x},{click_y})")
+                seen = True
+                # still on screen = not accepted; click the fixed spot (CS2 foreground only) until gone
+                if now - last_click >= CLICK_THROTTLE_SEC:
+                    if user32.GetForegroundWindow() == hwnd or _force_foreground(hwnd):
+                        self._click_at(click_x, click_y)
+                        clicks += 1
+                        last_click = now
+                time.sleep(POLL_INTERVAL_SEC)
+                continue
+
+            if _banner_in_window(hwnd, w, h):
+                # the game still shows it, just not on screen: covered or behind
+                seen = True
+                if user32.GetForegroundWindow() != hwnd:
+                    _force_foreground(hwnd)
+                elif not waiting_logged:
+                    logger.info("CS2 accept button covered by an always-on-top window — waiting")
+                    waiting_logged = True
+            elif seen:
+                logger.info(f"CS2 accepted — banner gone after {clicks} click(s)")
                 return
-            elif (now - start >= DETECT_DEADLINE_SEC
-                  and blind_clicks < MAX_BLIND_CLICKS
-                  and now - last_click >= CLICK_THROTTLE_SEC):
-                # blind fallback when the button was never located
-                if click(blind_x, blind_y):
-                    blind_clicks += 1
-                    last_click = now
+            time.sleep(WINDOW_CHECK_INTERVAL)
 
-            time.sleep(POLL_INTERVAL_SEC)
-
-        logger.info(
-            f"CS2 accept finished — {clicks} located click(s), "
-            f"{blind_clicks} blind, button_detected={saw_button}"
-        )
+        logger.info(f"CS2 accept gave up after {MAX_ACCEPT_SECONDS:.0f}s — {clicks} click(s), seen={seen}")
 
     def _click_at(self, x: int, y: int):
+        # 50ms delays are required for CS2's menu to register the click — do not shorten
         win32api.SetCursorPos((x, y))
         time.sleep(0.05)
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
