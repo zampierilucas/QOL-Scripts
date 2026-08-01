@@ -51,7 +51,7 @@ A Windows system tray application that provides quality-of-life automation for g
    ```
 3. Run the application:
    ```bash
-   python src/main.py
+   python src/app.py
    ```
 
 ## Usage

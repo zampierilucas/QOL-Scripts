@@ -1,29 +1,36 @@
 import re
+import time
 import logging
 import screen_brightness_control as sbc
-from threading import Thread
+from threading import Lock, Thread
 from win32gui import GetForegroundWindow
-from win32api import GetMonitorInfo, MonitorFromWindow
+from win32api import EnumDisplayDevices, GetMonitorInfo, MonitorFromWindow
 from win32con import MONITOR_DEFAULTTONEAREST
 
 logger = logging.getLogger(__name__)
 
-# Module-level monitor cache (populated once at startup)
 _monitors_cache = None
+_cache_time = 0.0
+_CACHE_TTL_SEC = 300  # displays can be hot-plugged/undocked
 
 
 def init_monitors_cache():
-    """Initialize the monitor cache. Call once at startup."""
-    global _monitors_cache
+    """Populate the monitor cache (slow: WMI/DDC enumeration)."""
+    global _monitors_cache, _cache_time
     _monitors_cache = sbc.list_monitors_info()
+    _cache_time = time.monotonic()
     logger.info(f"Cached {len(_monitors_cache)} monitors")
     return _monitors_cache
 
 
+def invalidate_monitors_cache():
+    global _cache_time
+    _cache_time = 0.0
+
+
 def get_cached_monitors():
-    """Get cached monitor info. Returns empty list if not initialized."""
-    if _monitors_cache is None:
-        logger.warning("Monitor cache not initialized, initializing now")
+    """Cached monitor info, re-enumerated when stale."""
+    if _monitors_cache is None or time.monotonic() - _cache_time > _CACHE_TTL_SEC:
         return init_monitors_cache()
     return _monitors_cache
 
@@ -69,6 +76,7 @@ def set_brightness_side_monitors(brightness, monitor_ids):
             sbc.set_brightness(brightness, display=monitor_id)
         except Exception as e:
             logger.error(f"Failed to set brightness for {monitor_id}: {e}")
+            invalidate_monitors_cache()  # likely a detached monitor
 
 
 def get_focused_monitor_info():
@@ -101,39 +109,45 @@ def get_focused_monitor_info():
         return None
 
 
-def get_all_monitor_serials_except_focused():
-    """
-    Get all monitor serials except the one containing the focused window
-    """
+def get_focused_monitor_uid():
+    """UID of the focused window's monitor — matches sbc's 'uid' info field."""
+    device_name = get_focused_monitor_info()
+    if not device_name:
+        return None
     try:
-        focused_device = get_focused_monitor_info()
-        if not focused_device:
-            logger.debug("Cannot detect focused monitor, returning empty list")
+        # flag 1 (EDD_GET_DEVICE_INTERFACE_NAME) populates DeviceID
+        for adaptor_index in range(5):
+            try:
+                device = EnumDisplayDevices(device_name, adaptor_index, 1)
+            except Exception:
+                continue
+            match = re.search(r'UID(\d+)', device.DeviceID)
+            if match:
+                return match.group(1)
+        logger.debug(f"No device UID found for {device_name}")
+        return None
+    except Exception as e:
+        logger.error(f"Error resolving focused monitor UID: {e}")
+        return None
+
+
+def get_all_monitor_serials_except_focused():
+    """All monitor serials except the focused one; [] if it can't be identified."""
+    try:
+        focused_uid = get_focused_monitor_uid()
+        if focused_uid is None:
+            logger.debug("Cannot identify focused monitor, returning empty list")
             return []
 
-        match = re.search(r'DISPLAY(\d+)', focused_device)
-        if match:
-            focused_display_index = int(match.group(1)) - 1
-            logger.debug(f"Focused display index: {focused_display_index}")
-        else:
-            logger.debug(f"Could not parse display number from: {focused_device}")
-            focused_display_index = 0
-
         monitors_info = get_cached_monitors()
-        logger.debug(f"Total monitors found: {len(monitors_info)}")
+        if not any(info.get('uid') == focused_uid for info in monitors_info):
+            logger.debug(f"Focused monitor UID {focused_uid} not in monitor list, returning empty list")
+            return []
 
-        non_focused_serials = []
-
-        for idx, info in enumerate(monitors_info):
-            serial = info.get('serial', '')
-            logger.debug(f"Monitor {idx}: serial={serial}, name={info.get('name', 'Unknown')}")
-
-            if idx != focused_display_index:
-                non_focused_serials.append(serial)
-                logger.debug("  -> Adding to dim list")
-            else:
-                logger.debug("  -> Skipping (focused monitor)")
-
+        non_focused_serials = [
+            info.get('serial', '') for info in monitors_info
+            if info.get('uid') != focused_uid
+        ]
         logger.debug(f"Monitors to dim (serials): {non_focused_serials}")
         return non_focused_serials
 
@@ -154,6 +168,9 @@ class BrightnessFocusConsumer:
         self.focus_monitor = focus_monitor
         self._thread = None
         self._running = False
+        # serials we dimmed and have not yet restored
+        self._dimmed = set()
+        self._dimmed_lock = Lock()
 
     def start(self):
         if self._running:
@@ -165,6 +182,15 @@ class BrightnessFocusConsumer:
     def stop(self):
         # FocusMonitor.stop() will notify_all and our wait() returns None.
         self._running = False
+
+    def restore_dimmed(self):
+        """Restore every monitor this consumer dimmed to 'high'."""
+        with self._dimmed_lock:
+            dimmed = list(self._dimmed)
+            self._dimmed.clear()
+        if dimmed:
+            logger.debug(f"Restoring previously dimmed monitors: {dimmed}")
+            set_brightness_side_monitors(self.settings.data["monitor_brightness"]["high"], dimmed)
 
     def _run(self):
         sub = self.focus_monitor.subscribe()
@@ -189,8 +215,19 @@ class BrightnessFocusConsumer:
             monitors_to_dim = (get_all_monitor_serials_except_focused()
                                if dim_all_mode
                                else self.settings.data["dimmable_monitors"])
-            logger.debug(f"Game focused - dimming monitors: {monitors_to_dim}")
-            set_brightness_side_monitors(brightness_settings["low"], monitors_to_dim)
+            target = {m for m in monitors_to_dim if m}
+            with self._dimmed_lock:
+                no_longer_dimmed = self._dimmed - target
+                newly_dimmed = target - self._dimmed
+            if no_longer_dimmed:
+                logger.debug(f"Restoring monitors that left the dim set: {sorted(no_longer_dimmed)}")
+                set_brightness_side_monitors(brightness_settings["high"], no_longer_dimmed)
+            if newly_dimmed:
+                logger.debug(f"Game focused - dimming monitors: {sorted(newly_dimmed)}")
+                set_brightness_side_monitors(brightness_settings["low"], newly_dimmed)
+            with self._dimmed_lock:
+                self._dimmed -= no_longer_dimmed
+                self._dimmed |= newly_dimmed
         else:
-            logger.debug("Game unfocused - restoring all monitors")
-            set_brightness_side_monitors(brightness_settings["high"], get_all_monitor_serials())
+            # only what we dimmed — other monitors may be manually adjusted
+            self.restore_dimmed()

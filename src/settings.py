@@ -1,9 +1,13 @@
 import json
+import logging
+import os
 import pathlib
 import threading
 import appdirs
 
 from brightness import clean_window_title
+
+logger = logging.getLogger(__name__)
 
 PROGRAM_NAME = "QOL-Scripts"
 CONFIG_DIR = pathlib.Path(appdirs.user_config_dir(PROGRAM_NAME))
@@ -80,11 +84,22 @@ class Settings:
                             updated = True
                 if updated:
                     self.save_settings()
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError:
+            self.data = self.DEFAULT_SETTINGS.copy()
+            self.save_settings()
+        except json.JSONDecodeError:
+            backup = CONFIG_FILE.with_suffix(".json.bak")
+            try:
+                os.replace(CONFIG_FILE, backup)
+                logger.warning(f"settings.json is corrupt; backed it up to {backup} and reset to defaults")
+            except OSError:
+                logger.warning("settings.json is corrupt and could not be backed up; resetting to defaults")
             self.data = self.DEFAULT_SETTINGS.copy()
             self.save_settings()
 
     def save_settings(self):
         with self._lock:
-            with open(CONFIG_FILE, 'w') as f:
+            tmp = CONFIG_FILE.with_suffix(".json.tmp")
+            with open(tmp, 'w') as f:
                 json.dump(self.data, f, indent=4)
+            os.replace(tmp, CONFIG_FILE)

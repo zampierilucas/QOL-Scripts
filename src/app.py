@@ -106,6 +106,7 @@ class QOLApp:
         _enable_dark_menus_process()
         self.create_tray_icon()
         self.running = True
+        self._stopping = False
         self.install_dir = os.path.join(os.environ['LOCALAPPDATA'], 'Programs', PROGRAM_NAME)
         self.startup_shortcut = os.path.join(winshell.startup(), f"{PROGRAM_NAME}.lnk")
         self.sync_startup_version()
@@ -419,10 +420,7 @@ class QOLApp:
             self.settings.data["dimming_enabled"] = not self.settings.data["dimming_enabled"]
             self.settings.save_settings()
             if not self.settings.data["dimming_enabled"]:
-                set_brightness_side_monitors(
-                    self.settings.data["monitor_brightness"]["high"],
-                    self.settings.data["dimmable_monitors"]
-                )
+                self.brightness_consumer.restore_dimmed()
 
         def toggle_auto_accept(_icon, _item):
             self.settings.data["auto_accept_enabled"] = not self.settings.data["auto_accept_enabled"]
@@ -503,28 +501,27 @@ class QOLApp:
         self.settings_requested = True
 
     def stop(self, _icon=None, _item=None):
-        if self.running:
-            self.running = False
-            if self.settings_window:
-                try:
-                    # Schedule destroy on the main thread to avoid tkinter threading issues
-                    self.settings_window.root.after(0, self.settings_window.root.destroy)
-                except Exception:
-                    pass
-            self.lcu_connector.stop()
-            self.cs2_watcher.stop()
-            self.brightness_consumer.stop()
-            self.vibrance_consumer.stop()
-            self.focus_monitor.stop()
-            self.icon.stop()
-            if self.settings.data["dimming_enabled"]:
-                set_brightness_side_monitors(
-                    self.settings.data["monitor_brightness"]["high"],
-                    self.settings.data["dimmable_monitors"]
-                )
-            if self.settings.data.get("vibrance_enabled", False):
-                vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
-                set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
+        if not self.running or self._stopping:
+            return
+        self._stopping = True
+        if self.settings_window:
+            try:
+                # Schedule destroy on the main thread to avoid tkinter threading issues
+                self.settings_window.root.after(0, self.settings_window.root.destroy)
+            except Exception:
+                pass
+        self.lcu_connector.stop()
+        self.cs2_watcher.stop()
+        self.brightness_consumer.stop()
+        self.vibrance_consumer.stop()
+        self.focus_monitor.stop()
+        self.icon.stop()
+        self.brightness_consumer.restore_dimmed()
+        if self.settings.data.get("vibrance_enabled", False):
+            vibrance_displays = self.settings.data.get("vibrance_displays", []) or None
+            set_vibrance(self.settings.data.get("vibrance_default_level", 50), vibrance_displays)
+        # last: run() exiting ends the process, killing this daemon thread
+        self.running = False
 
     def run(self):
         self.lcu_connector.start()
@@ -558,3 +555,59 @@ class QOLApp:
                 return
             time.sleep(0.1)
         logger.debug("pystray HWNDs never appeared; skipping dark menu opt-in")
+
+
+def _setup_logging(debug: bool):
+    """Configure logging for a standalone/source run. Always writes to a
+    rotating file so headless (pythonw / startup) runs stay debuggable with no
+    console, and also mirrors to the console when one is attached."""
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = os.path.join(os.environ.get("LOCALAPPDATA", tempfile.gettempdir()), PROGRAM_NAME)
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "app.log")
+
+    handlers = [RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")]
+    if sys.stderr is not None:  # sys.stderr is None under pythonw
+        handlers.append(logging.StreamHandler())
+
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        handlers=handlers,
+    )
+    for noisy in ("screen_brightness_control", "PIL", "urllib3", "requests", "comtypes"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    return log_path
+
+
+_instance_mutex = None
+
+
+def _acquire_single_instance() -> bool:
+    """Hold a named mutex for the process lifetime; False if already taken."""
+    global _instance_mutex
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _instance_mutex = kernel32.CreateMutexW(None, False, "QOL-Scripts-single-instance")
+    return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="QOL-Scripts")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    log_path = _setup_logging(args.debug)
+    if not _acquire_single_instance():
+        logger.warning("Another QOL-Scripts instance is already running; exiting")
+        sys.exit(0)
+    logger.info(f"Starting QOL-Scripts v{VERSION} (source) — logging to {log_path}")
+
+    app = QOLApp()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        logger.debug("Received Ctrl+C. Shutting down...")
+        app.stop()

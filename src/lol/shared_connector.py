@@ -92,6 +92,8 @@ class SharedLCUConnector:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             self.connector = Connector()
+            # cleared so start() returns on client close instead of psutil-polling forever
+            self.connector._repeat_flag = False
             self._client_connected = False
 
             @self.connector.ready
@@ -141,9 +143,9 @@ class SharedLCUConnector:
         if self.running:
             self.running = False
             try:
+                # graceful close makes start() return; the FindWindow wait re-checks self.running
                 if self.connector and self.loop and self.loop.is_running():
                     asyncio.run_coroutine_threadsafe(self.connector.stop(), self.loop)
-                    self.loop.call_soon_threadsafe(self.loop.stop)
                 logger.info("Shared LCU connector stopped")
             except Exception as e:
                 logger.error(f"Error stopping shared connector: {e}")

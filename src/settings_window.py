@@ -38,6 +38,7 @@ class AutocompleteCombobox(ttk.Entry):
         self._dropdown = None
         self._listbox = None
         self._selected_idx = -1
+        self._typed = False
 
         # Bind events
         self.bind('<KeyRelease>', self._on_keyrelease)
@@ -71,6 +72,7 @@ class AutocompleteCombobox(ttk.Entry):
 
     def _filter_and_show(self):
         """Filter values and show dropdown"""
+        self._typed = True
         typed = self._var.get().lower().strip()
 
         if not typed:
@@ -147,7 +149,9 @@ class AutocompleteCombobox(ttk.Entry):
         """Select current item"""
         if self._selected_idx >= 0 and self._selected_idx < len(self._filtered_values):
             self._select_value(self._filtered_values[self._selected_idx])
-        elif self._filtered_values:
+        elif self._typed and self._filtered_values:
+            # first-match fallback only after actual typing, else Enter on an
+            # untouched field would replace the value with the list head
             self._select_value(self._filtered_values[0])
         self._close_dropdown()
         return 'break'
@@ -171,6 +175,7 @@ class AutocompleteCombobox(ttk.Entry):
     def _select_value(self, value):
         """Set the selected value"""
         self._var.set(value)
+        self._typed = False
         self.icursor(tk.END)
 
     def get(self):
@@ -642,6 +647,15 @@ class SettingsWindow:
         champs_frame.pack(fill="x", pady=(0, 10))
 
         if self.owned_champions:
+            # keep configured champions the fetched list doesn't know (other
+            # account, partial LCU response) instead of degrading them to None
+            for role_data in self.settings.data.get("default_champions", {}).values():
+                for slot in ("primary", "secondary"):
+                    cid = role_data.get(slot) if isinstance(role_data, dict) else None
+                    if cid and cid not in self.champion_id_to_name:
+                        label = f"Unknown ({cid})"
+                        self.owned_champions[label] = cid
+                        self.champion_id_to_name[cid] = label
             champion_names = ["None"] + sorted(self.owned_champions.keys())
 
             # Header row
