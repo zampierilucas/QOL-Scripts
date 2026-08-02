@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import subprocess
 import tempfile
 import logging
 import base64
@@ -337,12 +338,21 @@ class QOLApp:
 
             bat_fd, bat_path = tempfile.mkstemp(suffix=".bat", prefix="QOL-update-")
             pid = os.getpid()
+            # The bootloader that spawned us keeps the exe mapped for a moment after
+            # we exit, so the first move can lose the race with it.
             bat_script = (
                 f"@echo off\n"
                 f":wait\n"
                 f"tasklist /fi \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul\n"
                 f"if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\n"
-                f"move /y \"{tmp_path}\" \"{installed_exe}\"\n"
+                f"set /a tries=0\n"
+                f":swap\n"
+                f"move /y \"{tmp_path}\" \"{installed_exe}\" >nul 2>&1\n"
+                f"if not errorlevel 1 goto launch\n"
+                f"set /a tries+=1\n"
+                f"if %tries% lss 30 (timeout /t 1 /nobreak >nul & goto swap)\n"
+                f"del \"{tmp_path}\" >nul 2>&1\n"
+                f":launch\n"
                 f"start \"\" \"{installed_exe}\"\n"
                 f"del \"%~f0\"\n"
             )
@@ -350,7 +360,15 @@ class QOLApp:
                 f.write(bat_script)
 
             logger.info("Launching update script and exiting")
-            os.startfile(bat_path)
+            # Not os.startfile: inheriting _PYI_* makes the relaunched exe reuse the
+            # bundle our bootloader deletes on exit, and its imports die with it.
+            env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI_")}
+            subprocess.Popen(
+                [os.environ.get("COMSPEC", "cmd.exe"), "/c", bat_path],
+                env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                close_fds=True,
+            )
             self.stop()
         except Exception as e:
             logger.error(f"Update failed: {e}")
